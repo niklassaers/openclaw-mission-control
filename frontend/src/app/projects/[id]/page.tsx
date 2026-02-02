@@ -340,6 +340,10 @@ export default function ProjectDetailPage() {
                       assignee.openclaw_session_key,
                   );
 
+                  const actorId = getActorEmployeeId();
+                  const isReviewer = Boolean(actorId && t.reviewer_employee_id && Number(t.reviewer_employee_id) === actorId);
+                  const canReviewActions = Boolean(t.id != null && isReviewer && (t.status ?? "") === "review");
+
                   return (
                     <div key={t.id ?? t.title} className="rounded-md border p-2 text-sm">
                       <div className="font-medium">{t.title}</div>
@@ -390,6 +394,34 @@ export default function ProjectDetailPage() {
                         >
                           Trigger
                         </Button>
+
+                        {canReviewActions ? (
+                          <>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() =>
+                                updateTask.mutate({
+                                  taskId: Number(t.id),
+                                  data: { status: "done" },
+                                })
+                              }
+                            >
+                              Approve
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                setCommentTaskId(Number(t.id));
+                                setReplyToCommentId(null);
+                              }}
+                              title="Leave a comment asking for changes, then move status back to in_progress"
+                            >
+                              Request changes
+                            </Button>
+                          </>
+                        ) : null}
 
                         <Button
                           variant="destructive"

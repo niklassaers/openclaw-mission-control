@@ -152,6 +152,17 @@ def update_task(
     if "status" in data and data["status"] not in ALLOWED_STATUSES:
         raise HTTPException(status_code=400, detail="Invalid status")
 
+    # If a task is sent to review and no reviewer is set, default reviewer to assignee's manager.
+    if (
+        data.get("status") in {"review", "ready_for_review"}
+        and data.get("reviewer_employee_id") is None
+    ):
+        assignee_id = data.get("assignee_employee_id", task.assignee_employee_id)
+        if assignee_id is not None:
+            assignee = session.get(Employee, assignee_id)
+            if assignee is not None and assignee.manager_id is not None:
+                data["reviewer_employee_id"] = assignee.manager_id
+
     for k, v in data.items():
         setattr(task, k, v)
     task.updated_at = datetime.utcnow()
