@@ -19,7 +19,8 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("employees", sa.Column("openclaw_agent_id", sa.String(), nullable=True))
+    # Be tolerant if the column was added manually during development.
+    op.execute("ALTER TABLE employees ADD COLUMN IF NOT EXISTS openclaw_agent_id VARCHAR")
 
 
 def downgrade() -> None:
