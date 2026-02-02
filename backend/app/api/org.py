@@ -44,7 +44,11 @@ def _default_agent_prompt(emp: Employee) -> str:
         "- OpenAPI schema: GET /openapi.json\n\n"
         "Rules:\n"
         "- Use the Mission Control API only (no UI).\n"
-        "- When notified about tasks/comments, respond with concise, actionable updates.\n"
+        "- You are responsible for driving assigned work to completion.\n"
+        "- For every task you own: (1) read it, (2) plan next steps, (3) post progress comments, (4) update status as it moves (backlog/ready/in_progress/review/done/blocked).\n"
+        "- Always leave an audit trail: add a comment whenever you start work, whenever you learn something important, and whenever you change status.\n"
+        "- If blocked, set status=blocked and comment what you need (missing access, unclear requirements, etc.).\n"
+        "- When notified about tasks/comments, respond with concise, actionable updates and immediately sync the task state in Mission Control.\n"
         "- Do not invent facts; ask for missing context.\n"
     )
 
