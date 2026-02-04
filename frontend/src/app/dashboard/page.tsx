@@ -16,6 +16,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { Activity, Clock, PenSquare, Timer, Users } from "lucide-react";
 
 import { DashboardSidebar } from "@/components/organisms/DashboardSidebar";
 import { DashboardShell } from "@/components/templates/DashboardShell";
@@ -97,6 +98,13 @@ const formatNumber = (value: number) => value.toLocaleString("en-US");
 const formatPercent = (value: number) => `${value.toFixed(1)}%`;
 const formatHours = (value: number | null) =>
   value === null || !Number.isFinite(value) ? "--" : `${value.toFixed(1)}h`;
+const calcProgress = (values?: number[]) => {
+  if (!values || values.length === 0) return 0;
+  const max = Math.max(...values);
+  if (!Number.isFinite(max) || max <= 0) return 0;
+  const latest = values[values.length - 1] ?? 0;
+  return Math.max(0, Math.min(100, Math.round((latest / max) * 100)));
+};
 
 function buildSeries(series: RangeSeries) {
   return series.points.map((point) => ({
@@ -138,8 +146,8 @@ type TooltipProps = {
 function TooltipCard({ active, payload, label, formatter }: TooltipProps) {
   if (!active || !payload?.length) return null;
   return (
-    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 shadow-lg">
-      <div className="text-slate-500">{label}</div>
+    <div className="rounded-lg bg-slate-900/95 px-3 py-2 text-xs text-slate-200 shadow-lg">
+      <div className="text-slate-400">{label}</div>
       <div className="mt-1 space-y-1">
         {payload.map((entry) => (
           <div key={entry.name} className="flex items-center justify-between gap-3">
@@ -164,31 +172,37 @@ function KpiCard({
   label,
   value,
   sublabel,
-  sparkline,
+  icon,
+  progress = 0,
 }: {
   label: string;
   value: string;
   sublabel?: string;
-  sparkline?: { values: number[]; labels: string[] };
+  icon: React.ReactNode;
+  progress?: number;
 }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">
-        {label}
-      </div>
-      <div className="mt-2 text-3xl font-semibold text-slate-900">{value}</div>
-      {sublabel ? (
-        <div className="mt-2 text-xs text-slate-500">{sublabel}</div>
-      ) : null}
-      {sparkline ? (
-        <div className="mt-4">
-          <MetricSparkline
-            values={sparkline.values}
-            labels={sparkline.labels}
-            bucket="week"
-          />
+    <div className="stat-card rounded-xl border border-slate-200 bg-white p-6 shadow-sm transition">
+      <div className="mb-4 flex items-center justify-between">
+        <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+          {label}
+        </p>
+        <div className="rounded-lg bg-blue-50 p-2 text-blue-600">
+          {icon}
         </div>
+      </div>
+      <div className="flex items-end gap-2">
+        <h3 className="font-heading text-4xl font-bold text-slate-900">{value}</h3>
+      </div>
+      {sublabel ? (
+        <p className="mt-2 text-xs text-slate-500">{sublabel}</p>
       ) : null}
+      <div className="mt-3 h-1 overflow-hidden rounded-full bg-slate-100">
+        <div
+          className="h-full rounded-full bg-gradient-to-r from-blue-500 to-blue-600"
+          style={{ width: `${progress}%` }}
+        />
+      </div>
     </div>
   );
 }
@@ -205,24 +219,30 @@ function ChartCard({
   sparkline?: { values: number[]; labels: string[] };
 }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex items-start justify-between">
+    <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+      <div className="mb-6 flex items-center justify-between">
         <div>
-          <div className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">
-            {subtitle}
-          </div>
-          <div className="mt-1 text-lg font-semibold text-slate-900">{title}</div>
+          <h3 className="font-heading text-base font-semibold text-slate-900">
+            {title}
+          </h3>
+          <p className="mt-1 text-sm text-slate-500">{subtitle}</p>
         </div>
-        <div className="text-xs text-slate-500">24h</div>
+        <span className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-500">
+          24h
+        </span>
       </div>
-      <div className="mt-4 h-56">{children}</div>
+      <div className="h-56">{children}</div>
       {sparkline ? (
-        <div className="mt-4">
-          <div className="text-xs text-slate-500">7d trend</div>
+        <div className="mt-4 border-t border-slate-100 pt-4">
+          <div className="flex items-center gap-2 text-xs text-slate-500">
+            <span className="h-2 w-2 rounded-full bg-blue-500" />
+            7d trend
+          </div>
           <MetricSparkline
             values={sparkline.values}
             labels={sparkline.labels}
             bucket="week"
+            className="mt-2"
           />
         </div>
       ) : null}
@@ -301,6 +321,23 @@ export default function DashboardPage() {
     [metrics],
   );
 
+  const activeProgress = useMemo(
+    () => (metrics ? Math.min(100, metrics.kpis.active_agents * 12.5) : 0),
+    [metrics],
+  );
+  const wipProgress = useMemo(
+    () => calcProgress(wipSpark?.values),
+    [wipSpark],
+  );
+  const errorProgress = useMemo(
+    () => calcProgress(errorSpark?.values),
+    [errorSpark],
+  );
+  const cycleProgress = useMemo(
+    () => calcProgress(cycleSpark?.values),
+    [cycleSpark],
+  );
+
   const updatedAtLabel = useMemo(() => {
     if (!metrics?.generated_at) return null;
     const date = new Date(metrics.generated_at);
@@ -311,221 +348,242 @@ export default function DashboardPage() {
   return (
     <DashboardShell>
       <SignedOut>
-        <div className="flex h-full flex-col items-center justify-center gap-4 rounded-2xl surface-panel p-10 text-center lg:col-span-2">
-          <p className="text-sm text-muted">
-            Sign in to access the dashboard.
-          </p>
-          <SignInButton
-            mode="modal"
-            forceRedirectUrl="/onboarding"
-            signUpForceRedirectUrl="/onboarding"
-          >
-            <Button>Sign in</Button>
-          </SignInButton>
+        <div className="col-span-2 flex min-h-[calc(100vh-64px)] items-center justify-center bg-slate-50 p-10 text-center">
+          <div className="rounded-xl border border-slate-200 bg-white px-8 py-6 shadow-sm">
+            <p className="text-sm text-slate-600">
+              Sign in to access the dashboard.
+            </p>
+            <SignInButton
+              mode="modal"
+              forceRedirectUrl="/onboarding"
+              signUpForceRedirectUrl="/onboarding"
+            >
+              <Button className="mt-4">Sign in</Button>
+            </SignInButton>
+          </div>
         </div>
       </SignedOut>
       <SignedIn>
         <DashboardSidebar />
-        <div className="flex h-full flex-col gap-6">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-strong">Dashboard</h2>
-            {updatedAtLabel ? (
-              <div className="text-xs text-muted">Updated {updatedAtLabel}</div>
+        <main className="flex-1 overflow-y-auto bg-slate-50">
+          <div className="border-b border-slate-200 bg-white px-8 py-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="font-heading text-2xl font-semibold text-slate-900 tracking-tight">
+                  Dashboard
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Monitor your mission control operations
+                </p>
+              </div>
+              {updatedAtLabel ? (
+                <div className="flex items-center gap-2 text-sm text-slate-500">
+                  <Clock className="h-4 w-4" />
+                  Updated {updatedAtLabel}
+                </div>
+              ) : null}
+            </div>
+          </div>
+          <div className="p-8">
+
+            {error ? (
+              <div className="rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-600 shadow-sm">
+                {error}
+              </div>
+            ) : null}
+
+            {isLoading && !metrics ? (
+              <div className="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-500 shadow-sm">
+                Loading dashboard metrics…
+              </div>
+            ) : null}
+
+            {metrics ? (
+              <>
+                <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-4">
+                  <KpiCard
+                    label="Active agents"
+                    value={formatNumber(metrics.kpis.active_agents)}
+                    sublabel="Last 10 minutes"
+                    icon={<Users className="h-4 w-4" />}
+                    progress={activeProgress}
+                  />
+                  <KpiCard
+                    label="Tasks in progress"
+                    value={formatNumber(metrics.kpis.tasks_in_progress)}
+                    sublabel="Current WIP"
+                    icon={<PenSquare className="h-4 w-4" />}
+                    progress={wipProgress}
+                  />
+                  <KpiCard
+                    label="Error rate"
+                    value={formatPercent(metrics.kpis.error_rate_pct)}
+                    sublabel="24h average"
+                    icon={<Activity className="h-4 w-4" />}
+                    progress={errorProgress}
+                  />
+                  <KpiCard
+                    label="Median cycle time"
+                    value={formatHours(metrics.kpis.median_cycle_time_hours_7d)}
+                    sublabel="7d median"
+                    icon={<Timer className="h-4 w-4" />}
+                    progress={cycleProgress}
+                  />
+                </div>
+
+                <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
+                  <ChartCard
+                    title="Completed Tasks"
+                    subtitle="Throughput"
+                    sparkline={throughputSpark ?? undefined}
+                  >
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={throughputSeries} margin={{ left: 4, right: 12 }}>
+                        <CartesianGrid vertical={false} stroke="#e2e8f0" />
+                        <XAxis
+                          dataKey="period"
+                          tickLine={false}
+                          axisLine={false}
+                          tick={{ fill: "#94a3b8", fontSize: 11 }}
+                        />
+                        <YAxis
+                          tickLine={false}
+                          axisLine={false}
+                          tick={{ fill: "#94a3b8", fontSize: 11 }}
+                          width={40}
+                        />
+                        <Tooltip content={<TooltipCard formatter={(v) => formatNumber(v)} />} />
+                        <Bar dataKey="value" name="Completed" fill="#2563eb" radius={[6, 6, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </ChartCard>
+
+                  <ChartCard
+                    title="Avg Hours to Review"
+                    subtitle="Cycle time"
+                    sparkline={cycleSpark ?? undefined}
+                  >
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={cycleSeries} margin={{ left: 4, right: 12 }}>
+                        <CartesianGrid vertical={false} stroke="#e2e8f0" />
+                        <XAxis
+                          dataKey="period"
+                          tickLine={false}
+                          axisLine={false}
+                          tick={{ fill: "#94a3b8", fontSize: 11 }}
+                        />
+                        <YAxis
+                          tickLine={false}
+                          axisLine={false}
+                          tick={{ fill: "#94a3b8", fontSize: 11 }}
+                          width={40}
+                        />
+                        <Tooltip
+                          content={<TooltipCard formatter={(v) => `${v.toFixed(1)}h`} />}
+                        />
+                        <Line
+                          type="monotone"
+                          dataKey="value"
+                          name="Hours"
+                          stroke="#1d4ed8"
+                          strokeWidth={2}
+                          dot={false}
+                        />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </ChartCard>
+
+                  <ChartCard
+                    title="Failed Events"
+                    subtitle="Error rate"
+                    sparkline={errorSpark ?? undefined}
+                  >
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={errorSeries} margin={{ left: 4, right: 12 }}>
+                        <CartesianGrid vertical={false} stroke="#e2e8f0" />
+                        <XAxis
+                          dataKey="period"
+                          tickLine={false}
+                          axisLine={false}
+                          tick={{ fill: "#94a3b8", fontSize: 11 }}
+                        />
+                        <YAxis
+                          tickLine={false}
+                          axisLine={false}
+                          tick={{ fill: "#94a3b8", fontSize: 11 }}
+                          width={40}
+                        />
+                        <Tooltip
+                          content={<TooltipCard formatter={(v) => formatPercent(v)} />}
+                        />
+                        <Line
+                          type="monotone"
+                          dataKey="value"
+                          name="Error rate"
+                          stroke="#1e40af"
+                          strokeWidth={2}
+                          dot={false}
+                        />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </ChartCard>
+
+                  <ChartCard
+                    title="Status Distribution"
+                    subtitle="Work in progress"
+                    sparkline={wipSpark ?? undefined}
+                  >
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={wipSeries} margin={{ left: 4, right: 12 }}>
+                        <CartesianGrid vertical={false} stroke="#e2e8f0" />
+                        <XAxis
+                          dataKey="period"
+                          tickLine={false}
+                          axisLine={false}
+                          tick={{ fill: "#94a3b8", fontSize: 11 }}
+                        />
+                        <YAxis
+                          tickLine={false}
+                          axisLine={false}
+                          tick={{ fill: "#94a3b8", fontSize: 11 }}
+                          width={40}
+                        />
+                        <Tooltip content={<TooltipCard formatter={(v) => formatNumber(v)} />} />
+                        <Area
+                          type="monotone"
+                          dataKey="inbox"
+                          name="Inbox"
+                          stackId="wip"
+                          fill="#dbeafe"
+                          stroke="#93c5fd"
+                          fillOpacity={0.8}
+                        />
+                        <Area
+                          type="monotone"
+                          dataKey="in_progress"
+                          name="In progress"
+                          stackId="wip"
+                          fill="#93c5fd"
+                          stroke="#2563eb"
+                          fillOpacity={0.8}
+                        />
+                        <Area
+                          type="monotone"
+                          dataKey="review"
+                          name="Review"
+                          stackId="wip"
+                          fill="#60a5fa"
+                          stroke="#1d4ed8"
+                          fillOpacity={0.85}
+                        />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </ChartCard>
+                </div>
+              </>
             ) : null}
           </div>
-
-          {error ? (
-            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
-              {error}
-            </div>
-          ) : null}
-
-          {isLoading && !metrics ? (
-            <div className="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-500 shadow-sm">
-              Loading dashboard metrics…
-            </div>
-          ) : null}
-
-          {metrics ? (
-            <>
-              <div className="grid gap-4 lg:grid-cols-4">
-                <KpiCard
-                  label="Active agents"
-                  value={formatNumber(metrics.kpis.active_agents)}
-                  sublabel="Last 10 minutes"
-                />
-                <KpiCard
-                  label="Tasks in progress"
-                  value={formatNumber(metrics.kpis.tasks_in_progress)}
-                  sublabel="Current WIP"
-                  sparkline={wipSpark ?? undefined}
-                />
-                <KpiCard
-                  label="Error rate"
-                  value={formatPercent(metrics.kpis.error_rate_pct)}
-                  sublabel="24h average"
-                  sparkline={errorSpark ?? undefined}
-                />
-                <KpiCard
-                  label="Median cycle time"
-                  value={formatHours(metrics.kpis.median_cycle_time_hours_7d)}
-                  sublabel="7d median"
-                  sparkline={cycleSpark ?? undefined}
-                />
-              </div>
-
-              <div className="grid gap-6 lg:grid-cols-2">
-                <ChartCard
-                  title="Throughput"
-                  subtitle="Completed tasks"
-                  sparkline={throughputSpark ?? undefined}
-                >
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={throughputSeries} margin={{ left: 4, right: 12 }}>
-                      <CartesianGrid vertical={false} stroke="#e5e7eb" />
-                      <XAxis
-                        dataKey="period"
-                        tickLine={false}
-                        axisLine={false}
-                        tick={{ fill: "#6b7280", fontSize: 12 }}
-                      />
-                      <YAxis
-                        tickLine={false}
-                        axisLine={false}
-                        tick={{ fill: "#6b7280", fontSize: 12 }}
-                        width={40}
-                      />
-                      <Tooltip content={<TooltipCard formatter={(v) => formatNumber(v)} />} />
-                      <Bar dataKey="value" name="Completed" fill="#2563eb" radius={[6, 6, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </ChartCard>
-
-                <ChartCard
-                  title="Cycle time"
-                  subtitle="Avg hours to review"
-                  sparkline={cycleSpark ?? undefined}
-                >
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={cycleSeries} margin={{ left: 4, right: 12 }}>
-                      <CartesianGrid vertical={false} stroke="#e5e7eb" />
-                      <XAxis
-                        dataKey="period"
-                        tickLine={false}
-                        axisLine={false}
-                        tick={{ fill: "#6b7280", fontSize: 12 }}
-                      />
-                      <YAxis
-                        tickLine={false}
-                        axisLine={false}
-                        tick={{ fill: "#6b7280", fontSize: 12 }}
-                        width={40}
-                      />
-                      <Tooltip
-                        content={<TooltipCard formatter={(v) => `${v.toFixed(1)}h`} />}
-                      />
-                      <Line
-                        type="monotone"
-                        dataKey="value"
-                        name="Hours"
-                        stroke="#16a34a"
-                        strokeWidth={2}
-                        dot={false}
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </ChartCard>
-
-                <ChartCard
-                  title="Error rate"
-                  subtitle="Failed events"
-                  sparkline={errorSpark ?? undefined}
-                >
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={errorSeries} margin={{ left: 4, right: 12 }}>
-                      <CartesianGrid vertical={false} stroke="#e5e7eb" />
-                      <XAxis
-                        dataKey="period"
-                        tickLine={false}
-                        axisLine={false}
-                        tick={{ fill: "#6b7280", fontSize: 12 }}
-                      />
-                      <YAxis
-                        tickLine={false}
-                        axisLine={false}
-                        tick={{ fill: "#6b7280", fontSize: 12 }}
-                        width={40}
-                      />
-                      <Tooltip
-                        content={<TooltipCard formatter={(v) => formatPercent(v)} />}
-                      />
-                      <Line
-                        type="monotone"
-                        dataKey="value"
-                        name="Error rate"
-                        stroke="#dc2626"
-                        strokeWidth={2}
-                        dot={false}
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </ChartCard>
-
-                <ChartCard
-                  title="Work in progress"
-                  subtitle="Status distribution"
-                  sparkline={wipSpark ?? undefined}
-                >
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={wipSeries} margin={{ left: 4, right: 12 }}>
-                      <CartesianGrid vertical={false} stroke="#e5e7eb" />
-                      <XAxis
-                        dataKey="period"
-                        tickLine={false}
-                        axisLine={false}
-                        tick={{ fill: "#6b7280", fontSize: 12 }}
-                      />
-                      <YAxis
-                        tickLine={false}
-                        axisLine={false}
-                        tick={{ fill: "#6b7280", fontSize: 12 }}
-                        width={40}
-                      />
-                      <Tooltip content={<TooltipCard formatter={(v) => formatNumber(v)} />} />
-                      <Area
-                        type="monotone"
-                        dataKey="inbox"
-                        name="Inbox"
-                        stackId="wip"
-                        fill="#cbd5f5"
-                        stroke="#94a3b8"
-                        fillOpacity={0.7}
-                      />
-                      <Area
-                        type="monotone"
-                        dataKey="in_progress"
-                        name="In progress"
-                        stackId="wip"
-                        fill="#93c5fd"
-                        stroke="#2563eb"
-                        fillOpacity={0.7}
-                      />
-                      <Area
-                        type="monotone"
-                        dataKey="review"
-                        name="Review"
-                        stackId="wip"
-                        fill="#86efac"
-                        stroke="#16a34a"
-                        fillOpacity={0.7}
-                      />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                </ChartCard>
-              </div>
-            </>
-          ) : null}
-        </div>
+        </main>
       </SignedIn>
     </DashboardShell>
   );

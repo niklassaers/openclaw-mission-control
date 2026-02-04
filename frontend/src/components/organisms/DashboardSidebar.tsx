@@ -10,18 +10,19 @@ export function DashboardSidebar() {
   const pathname = usePathname();
 
   return (
-    <aside className="flex h-full flex-col gap-6 rounded-2xl surface-panel p-5">
-      <div className="space-y-3">
-        <p className="text-xs font-semibold uppercase tracking-[0.32em] text-quiet">
+    <aside className="flex h-full w-64 flex-col border-r border-slate-200 bg-white">
+      <div className="flex-1 px-3 py-4">
+        <p className="px-3 text-xs font-semibold uppercase tracking-wider text-slate-500">
           Navigation
         </p>
-        <nav className="space-y-2 text-sm">
+        <nav className="mt-3 space-y-1 text-sm">
           <Link
             href="/dashboard"
             className={cn(
-              "flex items-center gap-3 rounded-xl border border-transparent px-3 py-2 font-semibold text-muted transition hover:border-[color:var(--border)] hover:bg-[color:var(--surface-muted)]",
-              pathname === "/dashboard" &&
-                "border-[color:var(--accent-soft)] bg-[color:var(--accent-soft)] text-[color:var(--accent-strong)]"
+              "flex items-center gap-3 rounded-lg px-3 py-2.5 text-slate-700 transition",
+              pathname === "/dashboard"
+                ? "bg-blue-100 text-blue-800 font-medium"
+                : "hover:bg-slate-100"
             )}
           >
             <BarChart3 className="h-4 w-4" />
@@ -30,9 +31,10 @@ export function DashboardSidebar() {
           <Link
             href="/boards"
             className={cn(
-              "flex items-center gap-3 rounded-xl border border-transparent px-3 py-2 font-semibold text-muted transition hover:border-[color:var(--border)] hover:bg-[color:var(--surface-muted)]",
-              pathname.startsWith("/boards") &&
-                "border-[color:var(--accent-soft)] bg-[color:var(--accent-soft)] text-[color:var(--accent-strong)]"
+              "flex items-center gap-3 rounded-lg px-3 py-2.5 text-slate-700 transition",
+              pathname.startsWith("/boards")
+                ? "bg-blue-100 text-blue-800 font-medium"
+                : "hover:bg-slate-100"
             )}
           >
             <LayoutGrid className="h-4 w-4" />
@@ -41,9 +43,10 @@ export function DashboardSidebar() {
           <Link
             href="/agents"
             className={cn(
-              "flex items-center gap-3 rounded-xl border border-transparent px-3 py-2 font-semibold text-muted transition hover:border-[color:var(--border)] hover:bg-[color:var(--surface-muted)]",
-              pathname.startsWith("/agents") &&
-                "border-[color:var(--accent-soft)] bg-[color:var(--accent-soft)] text-[color:var(--accent-strong)]"
+              "flex items-center gap-3 rounded-lg px-3 py-2.5 text-slate-700 transition",
+              pathname.startsWith("/agents")
+                ? "bg-blue-100 text-blue-800 font-medium"
+                : "hover:bg-slate-100"
             )}
           >
             <Bot className="h-4 w-4" />
@@ -51,13 +54,11 @@ export function DashboardSidebar() {
           </Link>
         </nav>
       </div>
-      <div className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4 text-xs text-quiet">
-        <p className="font-semibold uppercase tracking-[0.2em] text-strong">
-          Ops health
-        </p>
-        <p className="mt-2">
-          Live boards and agents appear here once data streams in.
-        </p>
+      <div className="border-t border-slate-200 p-4">
+        <div className="flex items-center gap-2 text-xs text-slate-500">
+          <span className="h-2 w-2 rounded-full bg-blue-500" />
+          All systems operational
+        </div>
       </div>
     </aside>
   );

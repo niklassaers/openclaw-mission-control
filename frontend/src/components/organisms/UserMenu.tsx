@@ -24,19 +24,19 @@ export function UserMenu({ className }: { className?: string }) {
         <button
           type="button"
           className={cn(
-            "flex h-12 items-center gap-2 rounded-lg px-2.5 text-gray-900 transition hover:bg-gray-100",
+            "flex h-11 items-center rounded-lg border border-transparent px-1 text-slate-900 transition hover:border-slate-200 hover:bg-slate-50",
             className,
           )}
           aria-label="Open user menu"
         >
-          <span className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-full bg-gray-100 text-sm font-semibold text-gray-900">
+          <span className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-lg bg-slate-100 text-sm font-semibold text-slate-900 shadow-sm">
             {avatarUrl ? (
               <Image
                 src={avatarUrl}
                 alt="User avatar"
-                width={40}
-                height={40}
-                className="h-10 w-10 object-cover"
+                width={44}
+                height={44}
+                className="h-11 w-11 object-cover"
               />
             ) : (
               avatarLabel
@@ -46,12 +46,12 @@ export function UserMenu({ className }: { className?: string }) {
       </PopoverTrigger>
       <PopoverContent
         align="end"
-        sideOffset={8}
-        className="w-64 rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)] p-0 shadow-lg"
+        sideOffset={10}
+        className="w-64 rounded-2xl border border-slate-200 bg-white p-0 shadow-lg"
       >
-        <div className="border-b border-[color:var(--border)] px-4 py-3">
+        <div className="border-b border-slate-200 px-4 py-3">
           <div className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-full bg-[color:var(--surface-muted)] text-sm font-semibold text-strong">
+            <span className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-lg bg-slate-100 text-sm font-semibold text-slate-900">
               {avatarUrl ? (
                 <Image
                   src={avatarUrl}
@@ -65,11 +65,11 @@ export function UserMenu({ className }: { className?: string }) {
               )}
             </span>
             <div className="min-w-0">
-              <div className="truncate text-sm font-semibold text-strong">
+              <div className="truncate text-sm font-semibold text-slate-900">
                 {displayName}
               </div>
               {displayEmail ? (
-                <div className="truncate text-xs text-muted">{displayEmail}</div>
+                <div className="truncate text-xs text-slate-500">{displayEmail}</div>
               ) : null}
             </div>
           </div>
@@ -78,9 +78,9 @@ export function UserMenu({ className }: { className?: string }) {
           <SignOutButton>
             <button
               type="button"
-              className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-strong transition hover:bg-[color:var(--surface-strong)]"
+              className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-slate-900 transition hover:bg-slate-100"
             >
-              <LogOut className="h-4 w-4 text-[color:var(--text-quiet)]" />
+              <LogOut className="h-4 w-4 text-slate-500" />
               Sign out
             </button>
           </SignOutButton>

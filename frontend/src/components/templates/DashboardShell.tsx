@@ -2,30 +2,36 @@
 
 import type { ReactNode } from "react";
 
-import { SignedIn } from "@clerk/nextjs";
+import { SignedIn, useUser } from "@clerk/nextjs";
 
 import { BrandMark } from "@/components/atoms/BrandMark";
 import { UserMenu } from "@/components/organisms/UserMenu";
 
 export function DashboardShell({ children }: { children: ReactNode }) {
+  const { user } = useUser();
+  const displayName =
+    user?.fullName ?? user?.firstName ?? user?.username ?? "Operator";
+
   return (
-    <div className="relative min-h-screen bg-app text-strong">
-      <div
-        className="absolute inset-0 bg-landing-grid opacity-[0.18] pointer-events-none"
-        aria-hidden="true"
-      />
-      <div className="relative flex min-h-screen w-full flex-col">
-        <header className="flex flex-wrap items-center justify-between gap-4 border-b border-[color:var(--border)] bg-[color:rgba(244,246,250,0.8)] px-6 py-3 backdrop-blur">
+    <div className="min-h-screen bg-app text-strong">
+      <header className="sticky top-0 z-40 border-b border-slate-200 bg-white shadow-sm">
+        <div className="flex items-center justify-between px-6 py-3">
           <BrandMark />
           <SignedIn>
-            <UserMenu />
+            <div className="flex items-center gap-3">
+              <div className="hidden text-right lg:block">
+                <p className="text-sm font-semibold text-slate-900">
+                  {displayName}
+                </p>
+                <p className="text-xs text-slate-500">Operator</p>
+              </div>
+              <UserMenu />
+            </div>
           </SignedIn>
-        </header>
-        <div className="flex-1 px-6 py-6">
-          <div className="grid gap-6 lg:grid-cols-[260px_1fr]">
-            {children}
-          </div>
         </div>
+      </header>
+      <div className="grid min-h-[calc(100vh-64px)] grid-cols-[260px_1fr] bg-slate-50">
+        {children}
       </div>
     </div>
   );
