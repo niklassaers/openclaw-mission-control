@@ -105,9 +105,11 @@ jobs:
           working-directory: frontend
           install-command: npm ci
           build: npm run build
-          start: npm start
-          wait-on: http://localhost:3000
+          # Bind to loopback to avoid CI network flakiness.
+          start: npm start -- -H 127.0.0.1 -p 3000
+          wait-on: http://127.0.0.1:3000
           command: npm run e2e
+          browser: chrome
         env:
           NEXT_TELEMETRY_DISABLED: "1"
           # Force Clerk disabled in E2E to keep tests secretless/deterministic.
