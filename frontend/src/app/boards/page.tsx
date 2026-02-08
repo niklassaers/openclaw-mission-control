@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 import { useMemo, useState } from "react";
 import Link from "next/link";
 
-import { SignedIn, SignedOut, useAuth } from "@/auth/clerk";
+import { useAuth } from "@/auth/clerk";
 import {
   type ColumnDef,
   flexRender,
@@ -28,8 +28,7 @@ import {
 import { formatTimestamp } from "@/lib/formatters";
 import { useOrganizationMembership } from "@/lib/use-organization-membership";
 import type { BoardGroupRead, BoardRead } from "@/api/generated/model";
-import { DashboardSidebar } from "@/components/organisms/DashboardSidebar";
-import { DashboardShell } from "@/components/templates/DashboardShell";
+import { DashboardPageLayout } from "@/components/templates/DashboardPageLayout";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Dialog,
@@ -39,7 +38,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { SignedOutPanel } from "@/components/auth/SignedOutPanel";
 import { TableEmptyStateRow, TableLoadingRow } from "@/components/ui/table-state";
 
 const compactId = (value: string) =>
@@ -228,125 +226,102 @@ export default function BoardsPage() {
   });
 
   return (
-    <DashboardShell>
-      <SignedOut>
-        <SignedOutPanel
-          message="Sign in to view boards."
-          forceRedirectUrl="/boards"
-          signUpForceRedirectUrl="/boards"
-        />
-      </SignedOut>
-      <SignedIn>
-        <DashboardSidebar />
-        <main className="flex-1 overflow-y-auto bg-slate-50">
-          <div className="sticky top-0 z-30 border-b border-slate-200 bg-white">
-            <div className="px-8 py-6">
-              <div className="flex flex-wrap items-center justify-between gap-4">
-                <div>
-                  <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
-                    Boards
-                  </h1>
-                  <p className="mt-1 text-sm text-slate-500">
-                    Manage boards and task workflows. {boards.length} board
-                    {boards.length === 1 ? "" : "s"} total.
-                  </p>
-                </div>
-                {boards.length > 0 && isAdmin ? (
-                  <Link
-                    href="/boards/new"
-                    className={buttonVariants({
-                      size: "md",
-                      variant: "primary",
-                    })}
-                  >
-                    Create board
-                  </Link>
-                ) : null}
-              </div>
-            </div>
-          </div>
-
-          <div className="p-8">
-            <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-sm">
-                  <thead className="sticky top-0 z-10 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
-                    {table.getHeaderGroups().map((headerGroup) => (
-                      <tr key={headerGroup.id}>
-                        {headerGroup.headers.map((header) => (
-                          <th
-                            key={header.id}
-                            className="px-6 py-3 text-left font-semibold"
-                          >
-                            {header.isPlaceholder
-                              ? null
-                              : flexRender(
-                                  header.column.columnDef.header,
-                                  header.getContext(),
-                                )}
-                          </th>
-                        ))}
-                      </tr>
+    <>
+      <DashboardPageLayout
+        signedOut={{
+          message: "Sign in to view boards.",
+          forceRedirectUrl: "/boards",
+          signUpForceRedirectUrl: "/boards",
+        }}
+        title="Boards"
+        description={`Manage boards and task workflows. ${boards.length} board${boards.length === 1 ? "" : "s"} total.`}
+        headerActions={
+          boards.length > 0 && isAdmin ? (
+            <Link
+              href="/boards/new"
+              className={buttonVariants({
+                size: "md",
+                variant: "primary",
+              })}
+            >
+              Create board
+            </Link>
+          ) : null
+        }
+        stickyHeader
+      >
+        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="sticky top-0 z-10 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                {table.getHeaderGroups().map((headerGroup) => (
+                  <tr key={headerGroup.id}>
+                    {headerGroup.headers.map((header) => (
+                      <th
+                        key={header.id}
+                        className="px-6 py-3 text-left font-semibold"
+                      >
+                        {header.isPlaceholder
+                          ? null
+                          : flexRender(
+                              header.column.columnDef.header,
+                              header.getContext(),
+                            )}
+                      </th>
                     ))}
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {boardsQuery.isLoading ? (
-                      <TableLoadingRow colSpan={columns.length} />
-                    ) : table.getRowModel().rows.length ? (
-                      table.getRowModel().rows.map((row) => (
-                        <tr
-                          key={row.id}
-                          className="transition hover:bg-slate-50"
-                        >
-                          {row.getVisibleCells().map((cell) => (
-                            <td key={cell.id} className="px-6 py-4 align-top">
-                              {flexRender(
-                                cell.column.columnDef.cell,
-                                cell.getContext(),
-                              )}
-                            </td>
-                          ))}
-                        </tr>
-                      ))
-                    ) : (
-                      <TableEmptyStateRow
-                        colSpan={columns.length}
-                        icon={
-                          <svg
-                            className="h-16 w-16 text-slate-300"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="1.5"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          >
-                            <rect x="3" y="3" width="7" height="7" />
-                            <rect x="14" y="3" width="7" height="7" />
-                            <rect x="14" y="14" width="7" height="7" />
-                            <rect x="3" y="14" width="7" height="7" />
-                          </svg>
-                        }
-                        title="No boards yet"
-                        description="Create your first board to start routing tasks and monitoring work across agents."
-                        actionHref="/boards/new"
-                        actionLabel="Create your first board"
-                      />
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {boardsQuery.error ? (
-              <p className="mt-4 text-sm text-red-500">
-                {boardsQuery.error.message}
-              </p>
-            ) : null}
+                  </tr>
+                ))}
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {boardsQuery.isLoading ? (
+                  <TableLoadingRow colSpan={columns.length} />
+                ) : table.getRowModel().rows.length ? (
+                  table.getRowModel().rows.map((row) => (
+                    <tr key={row.id} className="transition hover:bg-slate-50">
+                      {row.getVisibleCells().map((cell) => (
+                        <td key={cell.id} className="px-6 py-4 align-top">
+                          {flexRender(
+                            cell.column.columnDef.cell,
+                            cell.getContext(),
+                          )}
+                        </td>
+                      ))}
+                    </tr>
+                  ))
+                ) : (
+                  <TableEmptyStateRow
+                    colSpan={columns.length}
+                    icon={
+                      <svg
+                        className="h-16 w-16 text-slate-300"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <rect x="3" y="3" width="7" height="7" />
+                        <rect x="14" y="3" width="7" height="7" />
+                        <rect x="14" y="14" width="7" height="7" />
+                        <rect x="3" y="14" width="7" height="7" />
+                      </svg>
+                    }
+                    title="No boards yet"
+                    description="Create your first board to start routing tasks and monitoring work across agents."
+                    actionHref="/boards/new"
+                    actionLabel="Create your first board"
+                  />
+                )}
+              </tbody>
+            </table>
           </div>
-        </main>
-      </SignedIn>
+        </div>
 
+        {boardsQuery.error ? (
+          <p className="mt-4 text-sm text-red-500">{boardsQuery.error.message}</p>
+        ) : null}
+      </DashboardPageLayout>
       <Dialog
         open={!!deleteTarget}
         onOpenChange={(nextOpen) => {
@@ -378,6 +353,6 @@ export default function BoardsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </DashboardShell>
+    </>
   );
 }

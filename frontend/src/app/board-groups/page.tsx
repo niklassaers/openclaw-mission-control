@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 import { useMemo, useState } from "react";
 import Link from "next/link";
 
-import { SignedIn, SignedOut, useAuth } from "@/auth/clerk";
+import { useAuth } from "@/auth/clerk";
 import {
   type ColumnDef,
   flexRender,
@@ -22,8 +22,7 @@ import {
   useListBoardGroupsApiV1BoardGroupsGet,
 } from "@/api/generated/board-groups/board-groups";
 import type { BoardGroupRead } from "@/api/generated/model";
-import { DashboardSidebar } from "@/components/organisms/DashboardSidebar";
-import { DashboardShell } from "@/components/templates/DashboardShell";
+import { DashboardPageLayout } from "@/components/templates/DashboardPageLayout";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Dialog,
@@ -33,7 +32,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { SignedOutPanel } from "@/components/auth/SignedOutPanel";
 import { formatTimestamp } from "@/lib/formatters";
 import { TableEmptyStateRow, TableLoadingRow } from "@/components/ui/table-state";
 
@@ -179,120 +177,97 @@ export default function BoardGroupsPage() {
   });
 
   return (
-    <DashboardShell>
-      <SignedOut>
-        <SignedOutPanel
-          message="Sign in to view board groups."
-          forceRedirectUrl="/board-groups"
-        />
-      </SignedOut>
-      <SignedIn>
-        <DashboardSidebar />
-        <main className="flex-1 overflow-y-auto bg-slate-50">
-          <div className="sticky top-0 z-30 border-b border-slate-200 bg-white">
-            <div className="px-8 py-6">
-              <div className="flex flex-wrap items-center justify-between gap-4">
-                <div>
-                  <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
-                    Board groups
-                  </h1>
-                  <p className="mt-1 text-sm text-slate-500">
-                    Group boards so agents can see related work. {groups.length}{" "}
-                    group{groups.length === 1 ? "" : "s"} total.
-                  </p>
-                </div>
-                <Link
-                  href="/board-groups/new"
-                  className={buttonVariants({ size: "md", variant: "primary" })}
-                >
-                  Create group
-                </Link>
-              </div>
-            </div>
-          </div>
-
-          <div className="p-8">
-            <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-sm">
-                  <thead className="sticky top-0 z-10 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
-                    {table.getHeaderGroups().map((headerGroup) => (
-                      <tr key={headerGroup.id}>
-                        {headerGroup.headers.map((header) => (
-                          <th
-                            key={header.id}
-                            className="px-6 py-3 text-left font-semibold"
-                          >
-                            {header.isPlaceholder
-                              ? null
-                              : flexRender(
-                                  header.column.columnDef.header,
-                                  header.getContext(),
-                                )}
-                          </th>
-                        ))}
-                      </tr>
+    <>
+      <DashboardPageLayout
+        signedOut={{
+          message: "Sign in to view board groups.",
+          forceRedirectUrl: "/board-groups",
+        }}
+        title="Board groups"
+        description={`Group boards so agents can see related work. ${groups.length} group${groups.length === 1 ? "" : "s"} total.`}
+        headerActions={
+          <Link
+            href="/board-groups/new"
+            className={buttonVariants({ size: "md", variant: "primary" })}
+          >
+            Create group
+          </Link>
+        }
+        stickyHeader
+      >
+        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="sticky top-0 z-10 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                {table.getHeaderGroups().map((headerGroup) => (
+                  <tr key={headerGroup.id}>
+                    {headerGroup.headers.map((header) => (
+                      <th
+                        key={header.id}
+                        className="px-6 py-3 text-left font-semibold"
+                      >
+                        {header.isPlaceholder
+                          ? null
+                          : flexRender(
+                              header.column.columnDef.header,
+                              header.getContext(),
+                            )}
+                      </th>
                     ))}
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {groupsQuery.isLoading ? (
-                      <TableLoadingRow colSpan={columns.length} />
-                    ) : table.getRowModel().rows.length ? (
-                      table.getRowModel().rows.map((row) => (
-                        <tr
-                          key={row.id}
-                          className="transition hover:bg-slate-50"
-                        >
-                          {row.getVisibleCells().map((cell) => (
-                            <td key={cell.id} className="px-6 py-4 align-top">
-                              {flexRender(
-                                cell.column.columnDef.cell,
-                                cell.getContext(),
-                              )}
-                            </td>
-                          ))}
-                        </tr>
-                      ))
-                    ) : (
-                      <TableEmptyStateRow
-                        colSpan={columns.length}
-                        icon={
-                          <svg
-                            className="h-16 w-16 text-slate-300"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="1.5"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          >
-                            <path d="M3 7h8" />
-                            <path d="M3 17h8" />
-                            <path d="M13 7h8" />
-                            <path d="M13 17h8" />
-                            <path d="M3 12h18" />
-                          </svg>
-                        }
-                        title="No groups yet"
-                        description="Create a board group to increase cross-board visibility for agents."
-                        actionHref="/board-groups/new"
-                        actionLabel="Create your first group"
-                      />
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {groupsQuery.error ? (
-              <p className="mt-4 text-sm text-red-500">
-                {groupsQuery.error.message}
-              </p>
-            ) : null}
+                  </tr>
+                ))}
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {groupsQuery.isLoading ? (
+                  <TableLoadingRow colSpan={columns.length} />
+                ) : table.getRowModel().rows.length ? (
+                  table.getRowModel().rows.map((row) => (
+                    <tr key={row.id} className="transition hover:bg-slate-50">
+                      {row.getVisibleCells().map((cell) => (
+                        <td key={cell.id} className="px-6 py-4 align-top">
+                          {flexRender(
+                            cell.column.columnDef.cell,
+                            cell.getContext(),
+                          )}
+                        </td>
+                      ))}
+                    </tr>
+                  ))
+                ) : (
+                  <TableEmptyStateRow
+                    colSpan={columns.length}
+                    icon={
+                      <svg
+                        className="h-16 w-16 text-slate-300"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M3 7h8" />
+                        <path d="M3 17h8" />
+                        <path d="M13 7h8" />
+                        <path d="M13 17h8" />
+                        <path d="M3 12h18" />
+                      </svg>
+                    }
+                    title="No groups yet"
+                    description="Create a board group to increase cross-board visibility for agents."
+                    actionHref="/board-groups/new"
+                    actionLabel="Create your first group"
+                  />
+                )}
+              </tbody>
+            </table>
           </div>
-        </main>
-      </SignedIn>
+        </div>
 
+        {groupsQuery.error ? (
+          <p className="mt-4 text-sm text-red-500">{groupsQuery.error.message}</p>
+        ) : null}
+      </DashboardPageLayout>
       <Dialog
         open={!!deleteTarget}
         onOpenChange={(nextOpen) => {
@@ -324,6 +299,6 @@ export default function BoardGroupsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </DashboardShell>
+    </>
   );
 }
