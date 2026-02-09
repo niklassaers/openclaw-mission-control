@@ -1,30 +1,41 @@
+"""Helpers for ensuring each board has a provisioned lead agent."""
+
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlmodel import col, select
-from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.agent_tokens import generate_agent_token, hash_agent_token
 from app.core.time import utcnow
 from app.integrations.openclaw_gateway import GatewayConfig as GatewayClientConfig
-from app.integrations.openclaw_gateway import OpenClawGatewayError, ensure_session, send_message
+from app.integrations.openclaw_gateway import (
+    OpenClawGatewayError,
+    ensure_session,
+    send_message,
+)
 from app.models.agents import Agent
-from app.models.boards import Board
-from app.models.gateways import Gateway
-from app.models.users import User
 from app.services.agent_provisioning import DEFAULT_HEARTBEAT_CONFIG, provision_agent
+
+if TYPE_CHECKING:
+    from sqlmodel.ext.asyncio.session import AsyncSession
+
+    from app.models.boards import Board
+    from app.models.gateways import Gateway
+    from app.models.users import User
 
 
 def lead_session_key(board: Board) -> str:
+    """Return the deterministic main session key for a board lead agent."""
     return f"agent:lead-{board.id}:main"
 
 
 def lead_agent_name(_: Board) -> str:
+    """Return the default display name for board lead agents."""
     return "Lead Agent"
 
 
-async def ensure_board_lead_agent(
+async def ensure_board_lead_agent(  # noqa: PLR0913
     session: AsyncSession,
     *,
     board: Board,
@@ -35,11 +46,12 @@ async def ensure_board_lead_agent(
     identity_profile: dict[str, str] | None = None,
     action: str = "provision",
 ) -> tuple[Agent, bool]:
+    """Ensure a board has a lead agent; return `(agent, created)`."""
     existing = (
         await session.exec(
             select(Agent)
             .where(Agent.board_id == board.id)
-            .where(col(Agent.is_board_lead).is_(True))
+            .where(col(Agent.is_board_lead).is_(True)),
         )
     ).first()
     if existing:
@@ -66,7 +78,11 @@ async def ensure_board_lead_agent(
     }
     if identity_profile:
         merged_identity_profile.update(
-            {key: value.strip() for key, value in identity_profile.items() if value.strip()}
+            {
+                key: value.strip()
+                for key, value in identity_profile.items()
+                if value.strip()
+            },
         )
 
     agent = Agent(
@@ -89,11 +105,16 @@ async def ensure_board_lead_agent(
     try:
         await provision_agent(agent, board, gateway, raw_token, user, action=action)
         if agent.openclaw_session_id:
-            await ensure_session(agent.openclaw_session_id, config=config, label=agent.name)
+            await ensure_session(
+                agent.openclaw_session_id,
+                config=config,
+                label=agent.name,
+            )
             await send_message(
                 (
                     f"Hello {agent.name}. Your workspace has been provisioned.\n\n"
-                    "Start the agent, run BOOT.md, and if BOOTSTRAP.md exists run it once "
+                    "Start the agent, run BOOT.md, and if BOOTSTRAP.md exists run "
+                    "it once "
                     "then delete it. Begin heartbeats after startup."
                 ),
                 session_key=agent.openclaw_session_id,

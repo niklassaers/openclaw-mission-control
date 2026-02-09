@@ -1,3 +1,5 @@
+"""Alembic environment configuration for backend database migrations."""
+
 from __future__ import annotations
 
 import sys
@@ -16,8 +18,9 @@ from app import models  # noqa: E402,F401
 from app.core.config import settings  # noqa: E402
 
 config = context.config
+configure_logger = config.attributes.get("configure_logger", True)
 
-if config.config_file_name is not None and config.attributes.get("configure_logger", True):
+if config.config_file_name is not None and configure_logger:
     fileConfig(config.config_file_name)
 
 target_metadata = SQLModel.metadata
@@ -33,6 +36,7 @@ def _normalize_database_url(database_url: str) -> str:
 
 
 def get_url() -> str:
+    """Return the normalized SQLAlchemy database URL for Alembic."""
     return _normalize_database_url(settings.database_url)
 
 
@@ -40,6 +44,7 @@ config.set_main_option("sqlalchemy.url", get_url())
 
 
 def run_migrations_offline() -> None:
+    """Run migrations in offline mode without DB engine connectivity."""
     context.configure(
         url=get_url(),
         target_metadata=target_metadata,
@@ -52,6 +57,7 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
+    """Run migrations in online mode using a live DB connection."""
     configuration = config.get_section(config.config_ini_section) or {}
     configuration["sqlalchemy.url"] = get_url()
 

@@ -1,8 +1,13 @@
+"""Utilities for recording normalized activity events."""
+
 from __future__ import annotations
 
-from uuid import UUID
+from typing import TYPE_CHECKING
 
-from sqlmodel.ext.asyncio.session import AsyncSession
+if TYPE_CHECKING:
+    from uuid import UUID
+
+    from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.activity_events import ActivityEvent
 
@@ -15,6 +20,7 @@ def record_activity(
     agent_id: UUID | None = None,
     task_id: UUID | None = None,
 ) -> ActivityEvent:
+    """Create and attach an activity event row to the current DB session."""
     event = ActivityEvent(
         event_type=event_type,
         message=message,

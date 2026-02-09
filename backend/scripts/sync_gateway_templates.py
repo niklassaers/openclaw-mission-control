@@ -1,3 +1,6 @@
+# ruff: noqa: INP001
+"""CLI script to sync template files into gateway agent workspaces."""
+
 from __future__ import annotations
 
 import argparse
@@ -16,10 +19,15 @@ from app.services.template_sync import sync_gateway_templates  # noqa: E402
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Sync templates/ to existing OpenClaw gateway agent workspaces."
+        description="Sync templates/ to existing OpenClaw gateway agent workspaces.",
     )
     parser.add_argument("--gateway-id", type=str, required=True, help="Gateway UUID")
-    parser.add_argument("--board-id", type=str, default=None, help="Optional Board UUID filter")
+    parser.add_argument(
+        "--board-id",
+        type=str,
+        default=None,
+        help="Optional Board UUID filter",
+    )
     parser.add_argument(
         "--include-main",
         action=argparse.BooleanOptionalAction,
@@ -29,12 +37,18 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--reset-sessions",
         action="store_true",
-        help="Reset agent sessions after syncing files (forces agents to re-read workspace)",
+        help=(
+            "Reset agent sessions after syncing files "
+            "(forces agents to re-read workspace)"
+        ),
     )
     parser.add_argument(
         "--rotate-tokens",
         action="store_true",
-        help="Rotate agent tokens when TOOLS.md is missing/unreadable or token drift is detected",
+        help=(
+            "Rotate agent tokens when TOOLS.md is missing/unreadable "
+            "or token drift is detected"
+        ),
     )
     parser.add_argument(
         "--force-bootstrap",
@@ -52,7 +66,8 @@ async def _run() -> int:
     async with async_session_maker() as session:
         gateway = await session.get(Gateway, gateway_id)
         if gateway is None:
-            raise SystemExit(f"Gateway not found: {gateway_id}")
+            message = f"Gateway not found: {gateway_id}"
+            raise SystemExit(message)
 
         result = await sync_gateway_templates(
             session,
@@ -65,21 +80,29 @@ async def _run() -> int:
             board_id=board_id,
         )
 
-    print(f"gateway_id={result.gateway_id}")
-    print(f"include_main={result.include_main} reset_sessions={result.reset_sessions}")
-    print(
-        f"agents_updated={result.agents_updated} agents_skipped={result.agents_skipped} main_updated={result.main_updated}"
+    sys.stdout.write(f"gateway_id={result.gateway_id}\n")
+    sys.stdout.write(
+        f"include_main={result.include_main} "
+        f"reset_sessions={result.reset_sessions}\n",
+    )
+    sys.stdout.write(
+        f"agents_updated={result.agents_updated} "
+        f"agents_skipped={result.agents_skipped} "
+        f"main_updated={result.main_updated}\n",
     )
     if result.errors:
-        print("errors:")
+        sys.stdout.write("errors:\n")
         for err in result.errors:
             agent = f"{err.agent_name} ({err.agent_id})" if err.agent_id else "n/a"
-            print(f"- agent={agent} board_id={err.board_id} message={err.message}")
+            sys.stdout.write(
+                f"- agent={agent} board_id={err.board_id} message={err.message}\n",
+            )
         return 1
     return 0
 
 
 def main() -> None:
+    """Run the async CLI workflow and exit with its return code."""
     raise SystemExit(asyncio.run(_run()))
 
 

@@ -1,6 +1,8 @@
+"""Gateway model storing organization-level gateway integration metadata."""
+
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime  # noqa: TCH003
 from uuid import UUID, uuid4
 
 from sqlmodel import Field
@@ -10,6 +12,8 @@ from app.models.base import QueryModel
 
 
 class Gateway(QueryModel, table=True):
+    """Configured external gateway endpoint and authentication settings."""
+
     __tablename__ = "gateways"
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)

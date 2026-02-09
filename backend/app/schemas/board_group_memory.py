@@ -1,14 +1,18 @@
+"""Schemas for board-group memory create/read API payloads."""
+
 from __future__ import annotations
 
-from datetime import datetime
-from uuid import UUID
+from datetime import datetime  # noqa: TCH003
+from uuid import UUID  # noqa: TCH003
 
 from sqlmodel import SQLModel
 
-from app.schemas.common import NonEmptyStr
+from app.schemas.common import NonEmptyStr  # noqa: TCH001
 
 
 class BoardGroupMemoryCreate(SQLModel):
+    """Payload for creating a board-group memory entry."""
+
     # For writes, reject blank/whitespace-only content.
     content: NonEmptyStr
     tags: list[str] | None = None
@@ -16,9 +20,12 @@ class BoardGroupMemoryCreate(SQLModel):
 
 
 class BoardGroupMemoryRead(SQLModel):
+    """Serialized board-group memory entry returned from read endpoints."""
+
     id: UUID
     board_group_id: UUID
-    # For reads, allow legacy rows that may have empty content (avoid response validation 500s).
+    # For reads, allow legacy rows that may have empty content
+    # (avoid response validation 500s).
     content: str
     tags: list[str] | None = None
     source: str | None = None

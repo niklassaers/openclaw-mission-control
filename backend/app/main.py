@@ -1,7 +1,9 @@
+"""FastAPI application entrypoint and router wiring for the backend."""
+
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,11 +31,15 @@ from app.core.error_handling import install_error_handling
 from app.core.logging import configure_logging
 from app.db.session import init_db
 
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
 configure_logging()
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    """Initialize application resources before serving requests."""
     await init_db()
     yield
 
@@ -55,16 +61,19 @@ install_error_handling(app)
 
 @app.get("/health")
 def health() -> dict[str, bool]:
+    """Lightweight liveness probe endpoint."""
     return {"ok": True}
 
 
 @app.get("/healthz")
 def healthz() -> dict[str, bool]:
+    """Alias liveness probe endpoint for platform compatibility."""
     return {"ok": True}
 
 
 @app.get("/readyz")
 def readyz() -> dict[str, bool]:
+    """Readiness probe endpoint for service orchestration checks."""
     return {"ok": True}
 
 

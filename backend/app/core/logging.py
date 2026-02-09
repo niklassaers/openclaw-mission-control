@@ -1,3 +1,5 @@
+"""Application logging configuration and formatter utilities."""
+
 from __future__ import annotations
 
 import json
@@ -15,7 +17,8 @@ TRACE_LEVEL = 5
 logging.addLevelName(TRACE_LEVEL, "TRACE")
 
 
-def _trace(self: logging.Logger, message: str, *args: Any, **kwargs: Any) -> None:
+def _trace(self: logging.Logger, message: str, *args: object, **kwargs: object) -> None:
+    """Log a TRACE-level message when the logger is TRACE-enabled."""
     if self.isEnabledFor(TRACE_LEVEL):
         self._log(TRACE_LEVEL, message, args, **kwargs)
 
@@ -52,21 +55,31 @@ _STANDARD_LOG_RECORD_ATTRS = {
 
 
 class AppLogFilter(logging.Filter):
+    """Inject app metadata into each log record."""
+
     def __init__(self, app_name: str, version: str) -> None:
+        """Initialize the filter with fixed app and version values."""
         super().__init__()
         self._app_name = app_name
         self._version = version
 
     def filter(self, record: logging.LogRecord) -> bool:
+        """Attach app metadata fields to each emitted record."""
         record.app = self._app_name
         record.version = self._version
         return True
 
 
 class JsonFormatter(logging.Formatter):
+    """Formatter that serializes log records as compact JSON."""
+
     def format(self, record: logging.LogRecord) -> str:
+        """Render a single log record into a JSON string."""
         payload: dict[str, Any] = {
-            "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+            "timestamp": datetime.fromtimestamp(
+                record.created,
+                tz=timezone.utc,
+            ).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
@@ -88,7 +101,10 @@ class JsonFormatter(logging.Formatter):
 
 
 class KeyValueFormatter(logging.Formatter):
+    """Formatter that appends extra fields as `key=value` pairs."""
+
     def format(self, record: logging.LogRecord) -> str:
+        """Render a log line with appended non-standard record fields."""
         base = super().format(record)
         extras = {
             key: value
@@ -102,6 +118,8 @@ class KeyValueFormatter(logging.Formatter):
 
 
 class AppLogger:
+    """Centralized logging setup utility for the backend process."""
+
     _configured = False
 
     @classmethod
@@ -111,10 +129,12 @@ class AppLogger:
             return level_name, TRACE_LEVEL
         if level_name.isdigit():
             return level_name, int(level_name)
-        return level_name, logging._nameToLevel.get(level_name, logging.INFO)
+        levels = logging.getLevelNamesMapping()
+        return level_name, levels.get(level_name, logging.INFO)
 
     @classmethod
     def configure(cls, *, force: bool = False) -> None:
+        """Configure root logging handlers, formatters, and library levels."""
         if cls._configured and not force:
             return
 
@@ -127,7 +147,8 @@ class AppLogger:
             formatter: logging.Formatter = JsonFormatter()
         else:
             formatter = KeyValueFormatter(
-                "%(asctime)s %(levelname)s %(name)s %(message)s app=%(app)s version=%(version)s"
+                "%(asctime)s %(levelname)s %(name)s %(message)s "
+                "app=%(app)s version=%(version)s",
             )
             if settings.log_use_utc:
                 formatter.converter = time.gmtime
@@ -160,10 +181,12 @@ class AppLogger:
 
     @classmethod
     def get_logger(cls, name: str | None = None) -> logging.Logger:
+        """Return a logger, ensuring logging has been configured."""
         if not cls._configured:
             cls.configure()
         return logging.getLogger(name)
 
 
 def configure_logging() -> None:
+    """Configure global application logging once during startup."""
     AppLogger.configure()

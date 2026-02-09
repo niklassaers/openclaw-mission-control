@@ -1,6 +1,8 @@
+"""Task fingerprint model for duplicate/task-linking operations."""
+
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime  # noqa: TCH003
 from uuid import UUID, uuid4
 
 from sqlmodel import Field
@@ -10,6 +12,8 @@ from app.models.base import QueryModel
 
 
 class TaskFingerprint(QueryModel, table=True):
+    """Hashed task-content fingerprint associated with a board and task."""
+
     __tablename__ = "task_fingerprints"
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)

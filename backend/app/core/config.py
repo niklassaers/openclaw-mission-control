@@ -1,3 +1,5 @@
+"""Application settings and environment configuration loading."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -11,6 +13,8 @@ DEFAULT_ENV_FILE = BACKEND_ROOT / ".env"
 
 
 class Settings(BaseSettings):
+    """Typed runtime configuration sourced from environment variables."""
+
     model_config = SettingsConfigDict(
         # Load `backend/.env` regardless of current working directory.
         # (Important when running uvicorn from repo root or via a process manager.)
@@ -32,8 +36,8 @@ class Settings(BaseSettings):
     base_url: str = ""
 
     # Optional: local directory where the backend is allowed to write "preserved" agent
-    # workspace files (e.g. USER.md/SELF.md/MEMORY.md). If empty, local writes are disabled
-    # and provisioning relies on the gateway API.
+    # workspace files (e.g. USER.md/SELF.md/MEMORY.md). If empty, local
+    # writes are disabled and provisioning relies on the gateway API.
     #
     # Security note: do NOT point this at arbitrary system paths in production.
     local_agent_workspace_root: str = ""
@@ -48,8 +52,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _defaults(self) -> Self:
-        # In dev, default to applying Alembic migrations at startup to avoid schema drift
-        # (e.g. missing newly-added columns).
+        # In dev, default to applying Alembic migrations at startup to avoid
+        # schema drift (e.g. missing newly-added columns).
         if "db_auto_migrate" not in self.model_fields_set and self.environment == "dev":
             self.db_auto_migrate = True
         return self

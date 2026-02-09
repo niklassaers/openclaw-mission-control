@@ -1,6 +1,8 @@
+"""Board group model used to organize boards inside organizations."""
+
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime  # noqa: TCH003
 from uuid import UUID, uuid4
 
 from sqlmodel import Field
@@ -10,6 +12,8 @@ from app.models.tenancy import TenantScoped
 
 
 class BoardGroup(TenantScoped, table=True):
+    """Logical grouping container for boards within an organization."""
+
     __tablename__ = "board_groups"
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)

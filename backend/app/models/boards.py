@@ -1,6 +1,8 @@
+"""Board model for organization workspaces and goal configuration."""
+
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime  # noqa: TCH003
 from uuid import UUID, uuid4
 
 from sqlalchemy import JSON, Column
@@ -11,6 +13,8 @@ from app.models.tenancy import TenantScoped
 
 
 class Board(TenantScoped, table=True):
+    """Primary board entity grouping tasks, agents, and goal metadata."""
+
     __tablename__ = "boards"
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
@@ -18,10 +22,17 @@ class Board(TenantScoped, table=True):
     name: str
     slug: str = Field(index=True)
     gateway_id: UUID | None = Field(default=None, foreign_key="gateways.id", index=True)
-    board_group_id: UUID | None = Field(default=None, foreign_key="board_groups.id", index=True)
+    board_group_id: UUID | None = Field(
+        default=None,
+        foreign_key="board_groups.id",
+        index=True,
+    )
     board_type: str = Field(default="goal", index=True)
     objective: str | None = None
-    success_metrics: dict[str, object] | None = Field(default=None, sa_column=Column(JSON))
+    success_metrics: dict[str, object] | None = Field(
+        default=None,
+        sa_column=Column(JSON),
+    )
     target_date: datetime | None = None
     goal_confirmed: bool = Field(default=False)
     goal_source: str | None = None

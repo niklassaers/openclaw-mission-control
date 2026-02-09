@@ -1,21 +1,31 @@
+"""Gateway-facing agent provisioning and cleanup helpers."""
+# ruff: noqa: EM101, TRY003
+
 from __future__ import annotations
 
 import hashlib
 import json
 import re
+from contextlib import suppress
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
 
 from app.core.config import settings
 from app.integrations.openclaw_gateway import GatewayConfig as GatewayClientConfig
-from app.integrations.openclaw_gateway import OpenClawGatewayError, ensure_session, openclaw_call
-from app.models.agents import Agent
-from app.models.boards import Board
-from app.models.gateways import Gateway
-from app.models.users import User
+from app.integrations.openclaw_gateway import (
+    OpenClawGatewayError,
+    ensure_session,
+    openclaw_call,
+)
+
+if TYPE_CHECKING:
+    from app.models.agents import Agent
+    from app.models.boards import Board
+    from app.models.gateways import Gateway
+    from app.models.users import User
 
 DEFAULT_HEARTBEAT_CONFIG = {"every": "10m", "target": "none"}
 DEFAULT_IDENTITY_PROFILE = {
@@ -35,7 +45,8 @@ EXTRA_IDENTITY_PROFILE_FIELDS = {
     "verbosity": "identity_verbosity",
     "output_format": "identity_output_format",
     "update_cadence": "identity_update_cadence",
-    # Per-agent charter (optional). Used to give agents a "purpose in life" and a distinct vibe.
+    # Per-agent charter (optional).
+    # Used to give agents a "purpose in life" and a distinct vibe.
     "purpose": "identity_purpose",
     "personality": "identity_personality",
     "custom_instructions": "identity_custom_instructions",
@@ -54,11 +65,11 @@ DEFAULT_GATEWAY_FILES = frozenset(
         "BOOT.md",
         "BOOTSTRAP.md",
         "MEMORY.md",
-    }
+    },
 )
 
-# These files are intended to evolve within the agent workspace. Provision them if missing,
-# but avoid overwriting existing content during updates.
+# These files are intended to evolve within the agent workspace.
+# Provision them if missing, but avoid overwriting existing content during updates.
 #
 # Examples:
 # - SELF.md: evolving identity/preferences
@@ -68,6 +79,7 @@ PRESERVE_AGENT_EDITABLE_FILES = frozenset({"SELF.md", "USER.md", "MEMORY.md"})
 
 HEARTBEAT_LEAD_TEMPLATE = "HEARTBEAT_LEAD.md"
 HEARTBEAT_AGENT_TEMPLATE = "HEARTBEAT_AGENT.md"
+_SESSION_KEY_PARTS_MIN = 2
 MAIN_TEMPLATE_MAP = {
     "AGENTS.md": "MAIN_AGENTS.md",
     "HEARTBEAT.md": "MAIN_HEARTBEAT.md",
@@ -97,13 +109,13 @@ def _agent_id_from_session_key(session_key: str | None) -> str | None:
     if not value.startswith("agent:"):
         return None
     parts = value.split(":")
-    if len(parts) < 2:
+    if len(parts) < _SESSION_KEY_PARTS_MIN:
         return None
     agent_id = parts[1].strip()
     return agent_id or None
 
 
-def _extract_agent_id(payload: object) -> str | None:
+def _extract_agent_id(payload: object) -> str | None:  # noqa: C901
     def _from_list(items: object) -> str | None:
         if not isinstance(items, list):
             return None
@@ -137,7 +149,7 @@ def _agent_key(agent: Agent) -> str:
     session_key = agent.openclaw_session_id or ""
     if session_key.startswith("agent:"):
         parts = session_key.split(":")
-        if len(parts) >= 2 and parts[1]:
+        if len(parts) >= _SESSION_KEY_PARTS_MIN and parts[1]:
             return parts[1]
     return _slugify(agent.name)
 
@@ -183,14 +195,14 @@ def _ensure_workspace_file(
     if not workspace_path or not name:
         return
     # Only write to a dedicated, explicitly-configured local directory.
-    # Using `gateway.workspace_root` directly here is unsafe (and CodeQL correctly flags it)
-    # because it is a DB-backed config value.
+    # Using `gateway.workspace_root` directly here is unsafe.
+    # CodeQL correctly flags that value because it is DB-backed config.
     base_root = (settings.local_agent_workspace_root or "").strip()
     if not base_root:
         return
     base = Path(base_root).expanduser()
 
-    # Derive a stable, safe directory name from the (potentially untrusted) workspace path.
+    # Derive a stable, safe directory name from the untrusted workspace path.
     # This prevents path traversal and avoids writing to arbitrary locations.
     digest = hashlib.sha256(workspace_path.encode("utf-8")).hexdigest()[:16]
     root = base / f"gateway-workspace-{digest}"
@@ -345,12 +357,14 @@ async def _supported_gateway_files(config: GatewayClientConfig) -> set[str]:
         default_id = None
         if isinstance(agents_payload, dict):
             agents = list(agents_payload.get("agents") or [])
-            default_id = agents_payload.get("defaultId") or agents_payload.get("default_id")
+            default_id = agents_payload.get("defaultId") or agents_payload.get(
+                "default_id",
+            )
         agent_id = default_id or (agents[0].get("id") if agents else None)
         if not agent_id:
             return set(DEFAULT_GATEWAY_FILES)
         files_payload = await openclaw_call(
-            "agents.files.list", {"agentId": agent_id}, config=config
+            "agents.files.list", {"agentId": agent_id}, config=config,
         )
         if isinstance(files_payload, dict):
             files = files_payload.get("files") or []
@@ -374,10 +388,12 @@ async def _reset_session(session_key: str, config: GatewayClientConfig) -> None:
 
 
 async def _gateway_agent_files_index(
-    agent_id: str, config: GatewayClientConfig
+    agent_id: str, config: GatewayClientConfig,
 ) -> dict[str, dict[str, Any]]:
     try:
-        payload = await openclaw_call("agents.files.list", {"agentId": agent_id}, config=config)
+        payload = await openclaw_call(
+            "agents.files.list", {"agentId": agent_id}, config=config,
+        )
         if isinstance(payload, dict):
             files = payload.get("files") or []
             index: dict[str, dict[str, Any]] = {}
@@ -420,21 +436,25 @@ def _render_agent_files(
             )
             heartbeat_path = _templates_root() / heartbeat_template
             if heartbeat_path.exists():
-                rendered[name] = env.get_template(heartbeat_template).render(**context).strip()
+                rendered[name] = (
+                    env.get_template(heartbeat_template).render(**context).strip()
+                )
                 continue
         override = overrides.get(name)
         if override:
             rendered[name] = env.from_string(override).render(**context).strip()
             continue
         template_name = (
-            template_overrides[name] if template_overrides and name in template_overrides else name
+            template_overrides[name]
+            if template_overrides and name in template_overrides
+            else name
         )
         path = _templates_root() / template_name
         if path.exists():
             rendered[name] = env.get_template(template_name).render(**context).strip()
             continue
         if name == "MEMORY.md":
-            # Back-compat fallback for existing gateways that don't ship a MEMORY.md template.
+            # Back-compat fallback for gateways that do not ship MEMORY.md.
             rendered[name] = "# MEMORY\n\nBootstrap pending.\n"
             continue
         rendered[name] = ""
@@ -487,7 +507,9 @@ async def _patch_gateway_agent_list(
         else:
             new_list.append(entry)
     if not updated:
-        new_list.append({"id": agent_id, "workspace": workspace_path, "heartbeat": heartbeat})
+        new_list.append(
+            {"id": agent_id, "workspace": workspace_path, "heartbeat": heartbeat},
+        )
 
     patch = {"agents": {"list": new_list}}
     params = {"raw": json.dumps(patch)}
@@ -496,7 +518,7 @@ async def _patch_gateway_agent_list(
     await openclaw_call("config.patch", params, config=config)
 
 
-async def patch_gateway_agent_heartbeats(
+async def patch_gateway_agent_heartbeats(  # noqa: C901
     gateway: Gateway,
     *,
     entries: list[tuple[str, str, dict[str, Any]]],
@@ -521,7 +543,8 @@ async def patch_gateway_agent_heartbeats(
         raise OpenClawGatewayError("config agents.list is not a list")
 
     entry_by_id: dict[str, tuple[str, dict[str, Any]]] = {
-        agent_id: (workspace_path, heartbeat) for agent_id, workspace_path, heartbeat in entries
+        agent_id: (workspace_path, heartbeat)
+        for agent_id, workspace_path, heartbeat in entries
     }
 
     updated_ids: set[str] = set()
@@ -544,7 +567,9 @@ async def patch_gateway_agent_heartbeats(
     for agent_id, (workspace_path, heartbeat) in entry_by_id.items():
         if agent_id in updated_ids:
             continue
-        new_list.append({"id": agent_id, "workspace": workspace_path, "heartbeat": heartbeat})
+        new_list.append(
+            {"id": agent_id, "workspace": workspace_path, "heartbeat": heartbeat},
+        )
 
     patch = {"agents": {"list": new_list}}
     params = {"raw": json.dumps(patch)}
@@ -585,7 +610,9 @@ async def _remove_gateway_agent_list(
         raise OpenClawGatewayError("config agents.list is not a list")
 
     new_list = [
-        entry for entry in lst if not (isinstance(entry, dict) and entry.get("id") == agent_id)
+        entry
+        for entry in lst
+        if not (isinstance(entry, dict) and entry.get("id") == agent_id)
     ]
     if len(new_list) == len(lst):
         return
@@ -616,7 +643,7 @@ async def _get_gateway_agent_entry(
     return None
 
 
-async def provision_agent(
+async def provision_agent(  # noqa: C901, PLR0912, PLR0913
     agent: Agent,
     board: Board,
     gateway: Gateway,
@@ -627,6 +654,7 @@ async def provision_agent(
     force_bootstrap: bool = False,
     reset_session: bool = False,
 ) -> None:
+    """Provision or update a regular board agent workspace."""
     if not gateway.url:
         return
     if not gateway.workspace_root:
@@ -665,11 +693,9 @@ async def provision_agent(
         content = rendered.get(name)
         if not content:
             continue
-        try:
-            _ensure_workspace_file(workspace_path, name, content, overwrite=False)
-        except OSError:
+        with suppress(OSError):
             # Local workspace may not be writable/available; fall back to gateway API.
-            pass
+            _ensure_workspace_file(workspace_path, name, content, overwrite=False)
     for name, content in rendered.items():
         if content == "":
             continue
@@ -694,7 +720,7 @@ async def provision_agent(
         await _reset_session(session_key, client_config)
 
 
-async def provision_main_agent(
+async def provision_main_agent(  # noqa: C901, PLR0912, PLR0913
     agent: Agent,
     gateway: Gateway,
     auth_token: str,
@@ -704,12 +730,15 @@ async def provision_main_agent(
     force_bootstrap: bool = False,
     reset_session: bool = False,
 ) -> None:
+    """Provision or update the gateway main agent workspace."""
     if not gateway.url:
         return
     if not gateway.main_session_key:
         raise ValueError("gateway main_session_key is required")
     client_config = GatewayClientConfig(url=gateway.url, token=gateway.token)
-    await ensure_session(gateway.main_session_key, config=client_config, label="Main Agent")
+    await ensure_session(
+        gateway.main_session_key, config=client_config, label="Main Agent",
+    )
 
     agent_id = await _gateway_default_agent_id(
         client_config,
@@ -763,6 +792,7 @@ async def cleanup_agent(
     agent: Agent,
     gateway: Gateway,
 ) -> str | None:
+    """Remove an agent from gateway config and delete its session."""
     if not gateway.url:
         return None
     if not gateway.workspace_root:

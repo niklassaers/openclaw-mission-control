@@ -1,8 +1,11 @@
+# ruff: noqa: INP001, S101
+"""Tests for organization deletion API behavior and authorization."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from types import SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING, cast
 from uuid import uuid4
 
 import pytest
@@ -10,16 +13,19 @@ from fastapi import HTTPException, status
 
 from app.api import organizations
 
+if TYPE_CHECKING:
+    from sqlmodel.ext.asyncio.session import AsyncSession
+
 
 @dataclass
 class _FakeSession:
-    executed: list[Any] = field(default_factory=list)
+    executed: list[object] = field(default_factory=list)
     committed: int = 0
 
-    async def exec(self, statement: Any) -> None:
+    async def exec(self, statement: object) -> None:
         self.executed.append(statement)
 
-    async def execute(self, statement: Any) -> None:
+    async def execute(self, statement: object) -> None:
         self.executed.append(statement)
 
     async def commit(self) -> None:
@@ -28,6 +34,7 @@ class _FakeSession:
 
 @pytest.mark.asyncio
 async def test_delete_my_org_cleans_dependents_before_organization_delete() -> None:
+    """Delete flow should remove dependent rows before the organization row."""
     session = _FakeSession()
     org_id = uuid4()
     ctx = SimpleNamespace(
@@ -35,7 +42,10 @@ async def test_delete_my_org_cleans_dependents_before_organization_delete() -> N
         member=SimpleNamespace(role="owner"),
     )
 
-    await organizations.delete_my_org(session=session, ctx=ctx)
+    await organizations.delete_my_org(
+        session=cast("AsyncSession", session),
+        ctx=ctx,
+    )
 
     executed_tables = [statement.table.name for statement in session.executed]
     assert executed_tables == [
@@ -66,6 +76,7 @@ async def test_delete_my_org_cleans_dependents_before_organization_delete() -> N
 
 @pytest.mark.asyncio
 async def test_delete_my_org_requires_owner_role() -> None:
+    """Delete flow should reject non-owner members with HTTP 403."""
     session = _FakeSession()
     ctx = SimpleNamespace(
         organization=SimpleNamespace(id=uuid4()),
@@ -73,7 +84,10 @@ async def test_delete_my_org_requires_owner_role() -> None:
     )
 
     with pytest.raises(HTTPException) as exc_info:
-        await organizations.delete_my_org(session=session, ctx=ctx)
+        await organizations.delete_my_org(
+            session=cast("AsyncSession", session),
+            ctx=ctx,
+        )
 
     assert exc_info.value.status_code == status.HTTP_403_FORBIDDEN
     assert session.executed == []

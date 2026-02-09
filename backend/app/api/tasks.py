@@ -1,17 +1,19 @@
+"""Task API routes for listing, streaming, and mutating board tasks."""
+
 from __future__ import annotations
 
 import asyncio
 import json
 from collections import deque
 from collections.abc import AsyncIterator, Sequence
+from contextlib import suppress
 from datetime import datetime, timezone
-from typing import cast
+from typing import TYPE_CHECKING, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import asc, desc, or_
 from sqlmodel import col, select
-from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlmodel.sql.expression import Select
 from sse_starlette.sse import EventSourceResponse
 
@@ -23,13 +25,16 @@ from app.api.deps import (
     require_admin_auth,
     require_admin_or_agent,
 )
-from app.core.auth import AuthContext
 from app.core.time import utcnow
 from app.db import crud
 from app.db.pagination import paginate
 from app.db.session import async_session_maker, get_session
 from app.integrations.openclaw_gateway import GatewayConfig as GatewayClientConfig
-from app.integrations.openclaw_gateway import OpenClawGatewayError, ensure_session, send_message
+from app.integrations.openclaw_gateway import (
+    OpenClawGatewayError,
+    ensure_session,
+    send_message,
+)
 from app.models.activity_events import ActivityEvent
 from app.models.agents import Agent
 from app.models.approvals import Approval
@@ -41,7 +46,13 @@ from app.models.tasks import Task
 from app.schemas.common import OkResponse
 from app.schemas.errors import BlockedTaskError
 from app.schemas.pagination import DefaultLimitOffsetPage
-from app.schemas.tasks import TaskCommentCreate, TaskCommentRead, TaskCreate, TaskRead, TaskUpdate
+from app.schemas.tasks import (
+    TaskCommentCreate,
+    TaskCommentRead,
+    TaskCreate,
+    TaskRead,
+    TaskUpdate,
+)
 from app.services.activity_log import record_activity
 from app.services.mentions import extract_mentions, matches_agent_mention
 from app.services.organizations import require_board_access
@@ -53,6 +64,11 @@ from app.services.task_dependencies import (
     replace_task_dependencies,
     validate_dependency_update,
 )
+
+if TYPE_CHECKING:
+    from sqlmodel.ext.asyncio.session import AsyncSession
+
+    from app.core.auth import AuthContext
 
 router = APIRouter(prefix="/boards/{board_id}/tasks", tags=["tasks"])
 
@@ -66,6 +82,14 @@ TASK_EVENT_TYPES = {
 SSE_SEEN_MAX = 2000
 TASK_SNIPPET_MAX_LEN = 500
 TASK_SNIPPET_TRUNCATED_LEN = 497
+BOARD_READ_DEP = Depends(get_board_for_actor_read)
+ACTOR_DEP = Depends(require_admin_or_agent)
+SINCE_QUERY = Query(default=None)
+STATUS_QUERY = Query(default=None, alias="status")
+BOARD_WRITE_DEP = Depends(get_board_for_user_write)
+SESSION_DEP = Depends(get_session)
+ADMIN_AUTH_DEP = Depends(require_admin_auth)
+TASK_DEP = Depends(get_task_or_404)
 
 
 def _comment_validation_error() -> HTTPException:
@@ -98,6 +122,7 @@ async def has_valid_recent_comment(
     agent_id: UUID | None,
     since: datetime | None,
 ) -> bool:
+    """Check whether the task has a recent non-empty comment by the agent."""
     if agent_id is None or since is None:
         return False
     statement = (
@@ -180,8 +205,8 @@ async def _reconcile_dependents_for_dependency_toggle(
         await session.exec(
             select(Task)
             .where(col(Task.board_id) == board_id)
-            .where(col(Task.id).in_(dependent_ids))
-        )
+            .where(col(Task.id).in_(dependent_ids)),
+        ),
     )
     reopened = previous_status == "done" and dependency_task.status != "done"
 
@@ -204,7 +229,10 @@ async def _reconcile_dependents_for_dependency_toggle(
                     session,
                     event_type="task.status_changed",
                     task_id=dependent.id,
-                    message=f"Task returned to inbox: dependency reopened ({dependency_task.title}).",
+                    message=(
+                        "Task returned to inbox: dependency reopened "
+                        f"({dependency_task.title})."
+                    ),
                     agent_id=actor_agent_id,
                 )
             else:
@@ -230,7 +258,9 @@ async def _fetch_task_events(
     board_id: UUID,
     since: datetime,
 ) -> list[tuple[ActivityEvent, Task | None]]:
-    task_ids = list(await session.exec(select(Task.id).where(col(Task.board_id) == board_id)))
+    task_ids = list(
+        await session.exec(select(Task.id).where(col(Task.board_id) == board_id)),
+    )
     if not task_ids:
         return []
     statement = cast(
@@ -249,7 +279,9 @@ def _serialize_comment(event: ActivityEvent) -> dict[str, object]:
     return TaskCommentRead.model_validate(event).model_dump(mode="json")
 
 
-async def _gateway_config(session: AsyncSession, board: Board) -> GatewayClientConfig | None:
+async def _gateway_config(
+    session: AsyncSession, board: Board,
+) -> GatewayClientConfig | None:
     if not board.gateway_id:
         return None
     gateway = await Gateway.objects.by_id(board.gateway_id).first(session)
@@ -303,7 +335,10 @@ async def _notify_agent_on_task_assign(
     message = (
         "TASK ASSIGNED\n"
         + "\n".join(details)
-        + "\n\nTake action: open the task and begin work. Post updates as task comments."
+        + (
+            "\n\nTake action: open the task and begin work. "
+            "Post updates as task comments."
+        )
     )
     try:
         await _send_agent_task_message(
@@ -442,17 +477,18 @@ async def _notify_lead_on_task_unassigned(
 
 
 @router.get("/stream")
-async def stream_tasks(
+async def stream_tasks(  # noqa: C901
     request: Request,
-    board: Board = Depends(get_board_for_actor_read),
-    actor: ActorContext = Depends(require_admin_or_agent),
-    since: str | None = Query(default=None),
+    board: Board = BOARD_READ_DEP,
+    _actor: ActorContext = ACTOR_DEP,
+    since: str | None = SINCE_QUERY,
 ) -> EventSourceResponse:
+    """Stream task and task-comment events as SSE payloads."""
     since_dt = _parse_since(since) or utcnow()
     seen_ids: set[UUID] = set()
     seen_queue: deque[UUID] = deque()
 
-    async def event_generator() -> AsyncIterator[dict[str, str]]:
+    async def event_generator() -> AsyncIterator[dict[str, str]]:  # noqa: C901
         last_seen = since_dt
         while True:
             if await request.is_disconnected():
@@ -510,7 +546,7 @@ async def stream_tasks(
                                 "depends_on_task_ids": dep_list,
                                 "blocked_by_task_ids": blocked_by,
                                 "is_blocked": bool(blocked_by),
-                            }
+                            },
                         )
                         .model_dump(mode="json")
                     )
@@ -521,14 +557,15 @@ async def stream_tasks(
 
 
 @router.get("", response_model=DefaultLimitOffsetPage[TaskRead])
-async def list_tasks(
-    status_filter: str | None = Query(default=None, alias="status"),
+async def list_tasks(  # noqa: C901
+    status_filter: str | None = STATUS_QUERY,
     assigned_agent_id: UUID | None = None,
     unassigned: bool | None = None,
-    board: Board = Depends(get_board_for_actor_read),
-    session: AsyncSession = Depends(get_session),
-    actor: ActorContext = Depends(require_admin_or_agent),
+    board: Board = BOARD_READ_DEP,
+    session: AsyncSession = SESSION_DEP,
+    _actor: ActorContext = ACTOR_DEP,
 ) -> DefaultLimitOffsetPage[TaskRead]:
+    """List board tasks with optional status and assignment filters."""
     statement = select(Task).where(Task.board_id == board.id)
     if status_filter:
         statuses = [s.strip() for s in status_filter.split(",") if s.strip()]
@@ -550,7 +587,9 @@ async def list_tasks(
         if not tasks:
             return []
         task_ids = [task.id for task in tasks]
-        deps_map = await dependency_ids_by_task_id(session, board_id=board.id, task_ids=task_ids)
+        deps_map = await dependency_ids_by_task_id(
+            session, board_id=board.id, task_ids=task_ids,
+        )
         dep_ids: list[UUID] = []
         for value in deps_map.values():
             dep_ids.extend(value)
@@ -563,7 +602,9 @@ async def list_tasks(
         output: list[TaskRead] = []
         for task in tasks:
             dep_list = deps_map.get(task.id, [])
-            blocked_by = blocked_by_dependency_ids(dependency_ids=dep_list, status_by_id=dep_status)
+            blocked_by = blocked_by_dependency_ids(
+                dependency_ids=dep_list, status_by_id=dep_status,
+            )
             if task.status == "done":
                 blocked_by = []
             output.append(
@@ -572,8 +613,8 @@ async def list_tasks(
                         "depends_on_task_ids": dep_list,
                         "blocked_by_task_ids": blocked_by,
                         "is_blocked": bool(blocked_by),
-                    }
-                )
+                    },
+                ),
             )
         return output
 
@@ -583,10 +624,11 @@ async def list_tasks(
 @router.post("", response_model=TaskRead, responses={409: {"model": BlockedTaskError}})
 async def create_task(
     payload: TaskCreate,
-    board: Board = Depends(get_board_for_user_write),
-    session: AsyncSession = Depends(get_session),
-    auth: AuthContext = Depends(require_admin_auth),
+    board: Board = BOARD_WRITE_DEP,
+    session: AsyncSession = SESSION_DEP,
+    auth: AuthContext = ADMIN_AUTH_DEP,
 ) -> TaskRead:
+    """Create a task and initialize dependency rows."""
     data = payload.model_dump()
     depends_on_task_ids = cast(list[UUID], data.pop("depends_on_task_ids", []) or [])
 
@@ -606,7 +648,9 @@ async def create_task(
         board_id=board.id,
         dependency_ids=normalized_deps,
     )
-    blocked_by = blocked_by_dependency_ids(dependency_ids=normalized_deps, status_by_id=dep_status)
+    blocked_by = blocked_by_dependency_ids(
+        dependency_ids=normalized_deps, status_by_id=dep_status,
+    )
     if blocked_by and (task.assigned_agent_id is not None or task.status != "inbox"):
         raise _blocked_task_error(blocked_by)
     session.add(task)
@@ -618,7 +662,7 @@ async def create_task(
                 board_id=board.id,
                 task_id=task.id,
                 depends_on_task_id=dep_id,
-            )
+            ),
         )
     await session.commit()
     await session.refresh(task)
@@ -632,7 +676,9 @@ async def create_task(
     await session.commit()
     await _notify_lead_on_task_create(session=session, board=board, task=task)
     if task.assigned_agent_id:
-        assigned_agent = await Agent.objects.by_id(task.assigned_agent_id).first(session)
+        assigned_agent = await Agent.objects.by_id(task.assigned_agent_id).first(
+            session,
+        )
         if assigned_agent:
             await _notify_agent_on_task_assign(
                 session=session,
@@ -645,7 +691,7 @@ async def create_task(
             "depends_on_task_ids": normalized_deps,
             "blocked_by_task_ids": blocked_by,
             "is_blocked": bool(blocked_by),
-        }
+        },
     )
 
 
@@ -654,12 +700,13 @@ async def create_task(
     response_model=TaskRead,
     responses={409: {"model": BlockedTaskError}},
 )
-async def update_task(
+async def update_task(  # noqa: C901, PLR0912, PLR0915
     payload: TaskUpdate,
-    task: Task = Depends(get_task_or_404),
-    session: AsyncSession = Depends(get_session),
-    actor: ActorContext = Depends(require_admin_or_agent),
+    task: Task = TASK_DEP,
+    session: AsyncSession = SESSION_DEP,
+    actor: ActorContext = ACTOR_DEP,
 ) -> TaskRead:
+    """Update task status, assignment, comment, and dependency state."""
     if task.board_id is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -676,7 +723,9 @@ async def update_task(
     previous_assigned = task.assigned_agent_id
     updates = payload.model_dump(exclude_unset=True)
     comment = updates.pop("comment", None)
-    depends_on_task_ids = cast(list[UUID] | None, updates.pop("depends_on_task_ids", None))
+    depends_on_task_ids = cast(
+        list[UUID] | None, updates.pop("depends_on_task_ids", None),
+    )
 
     requested_fields = set(updates)
     if comment is not None:
@@ -685,7 +734,9 @@ async def update_task(
         requested_fields.add("depends_on_task_ids")
 
     async def _current_dep_ids() -> list[UUID]:
-        deps_map = await dependency_ids_by_task_id(session, board_id=board_id, task_ids=[task.id])
+        deps_map = await dependency_ids_by_task_id(
+            session, board_id=board_id, task_ids=[task.id],
+        )
         return deps_map.get(task.id, [])
 
     async def _blocked_by(dep_ids: Sequence[UUID]) -> list[UUID]:
@@ -696,16 +747,20 @@ async def update_task(
             board_id=board_id,
             dependency_ids=list(dep_ids),
         )
-        return blocked_by_dependency_ids(dependency_ids=list(dep_ids), status_by_id=dep_status)
+        return blocked_by_dependency_ids(
+            dependency_ids=list(dep_ids), status_by_id=dep_status,
+        )
 
-    # Lead agent: delegation only (assign/unassign, resolve review, manage dependencies).
+    # Lead agent: delegation only.
+    # Assign/unassign, resolve review, and manage dependencies.
     if actor.actor_type == "agent" and actor.agent and actor.agent.is_board_lead:
         allowed_fields = {"assigned_agent_id", "status", "depends_on_task_ids"}
         if comment is not None or not requested_fields.issubset(allowed_fields):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=(
-                    "Board leads can only assign/unassign tasks, update dependencies, or resolve review tasks."
+                    "Board leads can only assign/unassign tasks, update "
+                    "dependencies, or resolve review tasks."
                 ),
             )
 
@@ -745,7 +800,11 @@ async def update_task(
                             status_code=status.HTTP_403_FORBIDDEN,
                             detail="Board leads cannot assign tasks to themselves.",
                         )
-                    if agent.board_id and task.board_id and agent.board_id != task.board_id:
+                    if (
+                        agent.board_id
+                        and task.board_id
+                        and agent.board_id != task.board_id
+                    ):
                         raise HTTPException(status_code=status.HTTP_409_CONFLICT)
                     task.assigned_agent_id = agent.id
                 else:
@@ -755,12 +814,18 @@ async def update_task(
                 if task.status != "review":
                     raise HTTPException(
                         status_code=status.HTTP_403_FORBIDDEN,
-                        detail="Board leads can only change status when a task is in review.",
+                        detail=(
+                            "Board leads can only change status when a task is "
+                            "in review."
+                        ),
                     )
                 if updates["status"] not in {"done", "inbox"}:
                     raise HTTPException(
                         status_code=status.HTTP_403_FORBIDDEN,
-                        detail="Board leads can only move review tasks to done or inbox.",
+                        detail=(
+                            "Board leads can only move review tasks to done "
+                            "or inbox."
+                        ),
                     )
                 if updates["status"] == "inbox":
                     task.assigned_agent_id = None
@@ -793,7 +858,9 @@ async def update_task(
         await session.refresh(task)
 
         if task.assigned_agent_id and task.assigned_agent_id != previous_assigned:
-            assigned_agent = await Agent.objects.by_id(task.assigned_agent_id).first(session)
+            assigned_agent = await Agent.objects.by_id(task.assigned_agent_id).first(
+                session,
+            )
             if assigned_agent:
                 board = (
                     await Board.objects.by_id(task.board_id).first(session)
@@ -817,14 +884,18 @@ async def update_task(
                 "depends_on_task_ids": dep_ids,
                 "blocked_by_task_ids": blocked_ids,
                 "is_blocked": bool(blocked_ids),
-            }
+            },
         )
 
     # Non-lead agent: can only change status + comment, and cannot start blocked tasks.
     if actor.actor_type == "agent":
-        if actor.agent and actor.agent.board_id and task.board_id:
-            if actor.agent.board_id != task.board_id:
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
+        if (
+            actor.agent
+            and actor.agent.board_id
+            and task.board_id
+            and actor.agent.board_id != task.board_id
+        ):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
         allowed_fields = {"status", "comment"}
         if depends_on_task_ids is not None or not set(updates).issubset(allowed_fields):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
@@ -858,14 +929,16 @@ async def update_task(
             )
 
         effective_deps = (
-            admin_normalized_deps if admin_normalized_deps is not None else await _current_dep_ids()
+            admin_normalized_deps
+            if admin_normalized_deps is not None
+            else await _current_dep_ids()
         )
         blocked_ids = await _blocked_by(effective_deps)
 
         target_status = cast(str, updates.get("status", task.status))
         if blocked_ids and not (task.status == "done" and target_status == "done"):
-            # Blocked tasks cannot be assigned or moved out of inbox. If the task is already in
-            # flight, force it back to inbox and unassign it.
+            # Blocked tasks cannot be assigned or moved out of inbox.
+            # If the task is already in flight, force it back to inbox and unassign it.
             task.status = "inbox"
             task.assigned_agent_id = None
             task.in_progress_at = None
@@ -910,7 +983,9 @@ async def update_task(
             event_type="task.comment",
             message=comment,
             task_id=task.id,
-            agent_id=actor.agent.id if actor.actor_type == "agent" and actor.agent else None,
+            agent_id=actor.agent.id
+            if actor.actor_type == "agent" and actor.agent
+            else None,
         )
         session.add(event)
         await session.commit()
@@ -921,7 +996,9 @@ async def update_task(
     else:
         event_type = "task.updated"
         message = f"Task updated: {task.title}."
-    actor_agent_id = actor.agent.id if actor.actor_type == "agent" and actor.agent else None
+    actor_agent_id = (
+        actor.agent.id if actor.actor_type == "agent" and actor.agent else None
+    )
     record_activity(
         session,
         event_type=event_type,
@@ -938,23 +1015,34 @@ async def update_task(
     )
     await session.commit()
 
-    if task.status == "inbox" and task.assigned_agent_id is None:
-        if previous_status != "inbox" or previous_assigned is not None:
-            board = (
-                await Board.objects.by_id(task.board_id).first(session) if task.board_id else None
+    if (
+        task.status == "inbox"
+        and task.assigned_agent_id is None
+        and (previous_status != "inbox" or previous_assigned is not None)
+    ):
+        board = (
+            await Board.objects.by_id(task.board_id).first(session)
+            if task.board_id
+            else None
+        )
+        if board:
+            await _notify_lead_on_task_unassigned(
+                session=session,
+                board=board,
+                task=task,
             )
-            if board:
-                await _notify_lead_on_task_unassigned(
-                    session=session,
-                    board=board,
-                    task=task,
-                )
     if task.assigned_agent_id and task.assigned_agent_id != previous_assigned:
-        if actor.actor_type == "agent" and actor.agent and task.assigned_agent_id == actor.agent.id:
+        if (
+            actor.actor_type == "agent"
+            and actor.agent
+            and task.assigned_agent_id == actor.agent.id
+        ):
             # Don't notify the actor about their own assignment.
             pass
         else:
-            assigned_agent = await Agent.objects.by_id(task.assigned_agent_id).first(session)
+            assigned_agent = await Agent.objects.by_id(task.assigned_agent_id).first(
+                session,
+            )
             if assigned_agent:
                 board = (
                     await Board.objects.by_id(task.board_id).first(session)
@@ -978,16 +1066,17 @@ async def update_task(
             "depends_on_task_ids": dep_ids,
             "blocked_by_task_ids": blocked_ids,
             "is_blocked": bool(blocked_ids),
-        }
+        },
     )
 
 
 @router.delete("/{task_id}", response_model=OkResponse)
 async def delete_task(
-    session: AsyncSession = Depends(get_session),
-    task: Task = Depends(get_task_or_404),
-    auth: AuthContext = Depends(require_admin_auth),
+    session: AsyncSession = SESSION_DEP,
+    task: Task = TASK_DEP,
+    auth: AuthContext = ADMIN_AUTH_DEP,
 ) -> OkResponse:
+    """Delete a task and related records."""
     if task.board_id is None:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY)
     board = await Board.objects.by_id(task.board_id).first(session)
@@ -997,12 +1086,14 @@ async def delete_task(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
     await require_board_access(session, user=auth.user, board=board, write=True)
     await crud.delete_where(
-        session, ActivityEvent, col(ActivityEvent.task_id) == task.id, commit=False
+        session, ActivityEvent, col(ActivityEvent.task_id) == task.id, commit=False,
     )
     await crud.delete_where(
-        session, TaskFingerprint, col(TaskFingerprint.task_id) == task.id, commit=False
+        session, TaskFingerprint, col(TaskFingerprint.task_id) == task.id, commit=False,
     )
-    await crud.delete_where(session, Approval, col(Approval.task_id) == task.id, commit=False)
+    await crud.delete_where(
+        session, Approval, col(Approval.task_id) == task.id, commit=False,
+    )
     await crud.delete_where(
         session,
         TaskDependency,
@@ -1017,11 +1108,14 @@ async def delete_task(
     return OkResponse()
 
 
-@router.get("/{task_id}/comments", response_model=DefaultLimitOffsetPage[TaskCommentRead])
+@router.get(
+    "/{task_id}/comments", response_model=DefaultLimitOffsetPage[TaskCommentRead],
+)
 async def list_task_comments(
-    task: Task = Depends(get_task_or_404),
-    session: AsyncSession = Depends(get_session),
+    task: Task = TASK_DEP,
+    session: AsyncSession = SESSION_DEP,
 ) -> DefaultLimitOffsetPage[TaskCommentRead]:
+    """List comments for a task in chronological order."""
     statement = (
         select(ActivityEvent)
         .where(col(ActivityEvent.task_id) == task.id)
@@ -1032,12 +1126,13 @@ async def list_task_comments(
 
 
 @router.post("/{task_id}/comments", response_model=TaskCommentRead)
-async def create_task_comment(
+async def create_task_comment(  # noqa: C901, PLR0912
     payload: TaskCommentCreate,
-    task: Task = Depends(get_task_or_404),
-    session: AsyncSession = Depends(get_session),
-    actor: ActorContext = Depends(require_admin_or_agent),
+    task: Task = TASK_DEP,
+    session: AsyncSession = SESSION_DEP,
+    actor: ActorContext = ACTOR_DEP,
 ) -> ActivityEvent:
+    """Create a task comment and notify relevant agents."""
     if task.board_id is None:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY)
     if actor.actor_type == "user" and actor.user is not None:
@@ -1045,22 +1140,28 @@ async def create_task_comment(
         if board is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
         await require_board_access(session, user=actor.user, board=board, write=True)
-    if actor.actor_type == "agent" and actor.agent:
-        if actor.agent.is_board_lead and task.status != "review":
-            if not await _lead_was_mentioned(session, task, actor.agent) and not _lead_created_task(
-                task, actor.agent
-            ):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail=(
-                        "Board leads can only comment during review, when mentioned, or on tasks they created."
-                    ),
-                )
+    if (
+        actor.actor_type == "agent"
+        and actor.agent
+        and actor.agent.is_board_lead
+        and task.status != "review"
+        and not await _lead_was_mentioned(session, task, actor.agent)
+        and not _lead_created_task(task, actor.agent)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Board leads can only comment during review, when mentioned, "
+                "or on tasks they created."
+            ),
+        )
     event = ActivityEvent(
         event_type="task.comment",
         message=payload.message,
         task_id=task.id,
-        agent_id=actor.agent.id if actor.actor_type == "agent" and actor.agent else None,
+        agent_id=actor.agent.id
+        if actor.actor_type == "agent" and actor.agent
+        else None,
     )
     session.add(event)
     await session.commit()
@@ -1072,17 +1173,27 @@ async def create_task_comment(
             if matches_agent_mention(agent, mention_names):
                 targets[agent.id] = agent
     if not mention_names and task.assigned_agent_id:
-        assigned_agent = await Agent.objects.by_id(task.assigned_agent_id).first(session)
+        assigned_agent = await Agent.objects.by_id(task.assigned_agent_id).first(
+            session,
+        )
         if assigned_agent:
             targets[assigned_agent.id] = assigned_agent
     if actor.actor_type == "agent" and actor.agent:
         targets.pop(actor.agent.id, None)
     if targets:
-        board = await Board.objects.by_id(task.board_id).first(session) if task.board_id else None
+        board = (
+            await Board.objects.by_id(task.board_id).first(session)
+            if task.board_id
+            else None
+        )
         config = await _gateway_config(session, board) if board else None
         if board and config:
             snippet = _truncate_snippet(payload.message)
-            actor_name = actor.agent.name if actor.actor_type == "agent" and actor.agent else "User"
+            actor_name = (
+                actor.agent.name
+                if actor.actor_type == "agent" and actor.agent
+                else "User"
+            )
             for agent in targets.values():
                 if not agent.openclaw_session_id:
                     continue
@@ -1101,15 +1212,14 @@ async def create_task_comment(
                     f"From: {actor_name}\n\n"
                     f"{action_line}\n\n"
                     f"Comment:\n{snippet}\n\n"
-                    "If you are mentioned but not assigned, reply in the task thread but do not change task status."
+                    "If you are mentioned but not assigned, reply in the task "
+                    "thread but do not change task status."
                 )
-                try:
+                with suppress(OpenClawGatewayError):
                     await _send_agent_task_message(
                         session_key=agent.openclaw_session_id,
                         config=config,
                         agent_name=agent.name,
                         message=message,
                     )
-                except OpenClawGatewayError:
-                    pass
     return event

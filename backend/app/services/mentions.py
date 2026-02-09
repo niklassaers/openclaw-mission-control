@@ -1,18 +1,24 @@
+"""Helpers for extracting and matching `@mention` tokens in text."""
+
 from __future__ import annotations
 
 import re
+from typing import TYPE_CHECKING
 
-from app.models.agents import Agent
+if TYPE_CHECKING:
+    from app.models.agents import Agent
 
 # Mention tokens are single, space-free words (e.g. "@alex", "@lead").
 MENTION_PATTERN = re.compile(r"@([A-Za-z][\w-]{0,31})")
 
 
 def extract_mentions(message: str) -> set[str]:
+    """Extract normalized mention handles from a message body."""
     return {match.group(1).lower() for match in MENTION_PATTERN.finditer(message)}
 
 
 def matches_agent_mention(agent: Agent, mentions: set[str]) -> bool:
+    """Return whether a mention set targets the provided agent."""
     if not mentions:
         return False
 

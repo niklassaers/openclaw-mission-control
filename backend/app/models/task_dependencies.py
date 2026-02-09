@@ -1,6 +1,8 @@
+"""Task dependency edge model for board-local dependency graphs."""
+
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime  # noqa: TCH003
 from uuid import UUID, uuid4
 
 from sqlalchemy import CheckConstraint, UniqueConstraint
@@ -11,6 +13,8 @@ from app.models.tenancy import TenantScoped
 
 
 class TaskDependency(TenantScoped, table=True):
+    """Directed dependency edge between two tasks in the same board."""
+
     __tablename__ = "task_dependencies"
     __table_args__ = (
         UniqueConstraint(

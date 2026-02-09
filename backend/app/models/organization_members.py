@@ -1,6 +1,8 @@
+"""Organization membership model with role and board-access flags."""
+
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime  # noqa: TCH003
 from uuid import UUID, uuid4
 
 from sqlalchemy import UniqueConstraint
@@ -11,6 +13,8 @@ from app.models.base import QueryModel
 
 
 class OrganizationMember(QueryModel, table=True):
+    """Membership row linking a user to an organization and permissions."""
+
     __tablename__ = "organization_members"
     __table_args__ = (
         UniqueConstraint(

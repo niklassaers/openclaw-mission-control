@@ -1,8 +1,10 @@
+"""Database engine, session factory, and startup migration helpers."""
+
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncGenerator
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import anyio
 from alembic import command
@@ -14,6 +16,9 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app import models as _models
 from app.core.config import settings
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
 
 # Import model modules so SQLModel metadata is fully registered at startup.
 _MODEL_REGISTRY = _models
@@ -48,12 +53,14 @@ def _alembic_config() -> Config:
 
 
 def run_migrations() -> None:
+    """Apply Alembic migrations to the latest revision."""
     logger.info("Running database migrations.")
     command.upgrade(_alembic_config(), "head")
     logger.info("Database migrations complete.")
 
 
 async def init_db() -> None:
+    """Initialize database schema, running migrations when configured."""
     if settings.db_auto_migrate:
         versions_dir = Path(__file__).resolve().parents[2] / "migrations" / "versions"
         if any(versions_dir.glob("*.py")):
@@ -67,6 +74,7 @@ async def init_db() -> None:
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
+    """Yield a request-scoped async DB session with safe rollback on errors."""
     async with async_session_maker() as session:
         try:
             yield session

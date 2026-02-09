@@ -1,6 +1,8 @@
+"""Agent model representing autonomous actors assigned to boards."""
+
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime  # noqa: TCH003
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -12,6 +14,8 @@ from app.models.base import QueryModel
 
 
 class Agent(QueryModel, table=True):
+    """Agent configuration and lifecycle state persisted in the database."""
+
     __tablename__ = "agents"
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
@@ -20,8 +24,14 @@ class Agent(QueryModel, table=True):
     status: str = Field(default="provisioning", index=True)
     openclaw_session_id: str | None = Field(default=None, index=True)
     agent_token_hash: str | None = Field(default=None, index=True)
-    heartbeat_config: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
-    identity_profile: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
+    heartbeat_config: dict[str, Any] | None = Field(
+        default=None,
+        sa_column=Column(JSON),
+    )
+    identity_profile: dict[str, Any] | None = Field(
+        default=None,
+        sa_column=Column(JSON),
+    )
     identity_template: str | None = Field(default=None, sa_column=Column(Text))
     soul_template: str | None = Field(default=None, sa_column=Column(Text))
     provision_requested_at: datetime | None = Field(default=None)

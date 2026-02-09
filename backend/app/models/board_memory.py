@@ -1,6 +1,8 @@
+"""Board-level memory entries for persistent contextual state."""
+
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime  # noqa: TCH003
 from uuid import UUID, uuid4
 
 from sqlalchemy import JSON, Column
@@ -11,6 +13,8 @@ from app.models.base import QueryModel
 
 
 class BoardMemory(QueryModel, table=True):
+    """Persisted memory item attached directly to a board."""
+
     __tablename__ = "board_memory"
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)

@@ -1,3 +1,6 @@
+# ruff: noqa: INP001
+"""Pytest configuration shared across backend tests."""
+
 import sys
 from pathlib import Path
 

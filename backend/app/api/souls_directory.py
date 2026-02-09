@@ -1,3 +1,5 @@
+"""API routes for searching and fetching souls-directory markdown entries."""
+
 from __future__ import annotations
 
 import re
@@ -13,6 +15,7 @@ from app.schemas.souls_directory import (
 from app.services import souls_directory
 
 router = APIRouter(prefix="/souls-directory", tags=["souls-directory"])
+ADMIN_OR_AGENT_DEP = Depends(require_admin_or_agent)
 
 _SAFE_SEGMENT_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
 _SAFE_SLUG_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
@@ -41,8 +44,9 @@ def _validate_segment(value: str, *, field: str) -> str:
 async def search(
     q: str = Query(default="", min_length=0),
     limit: int = Query(default=20, ge=1, le=100),
-    _actor: ActorContext = Depends(require_admin_or_agent),
+    _actor: ActorContext = ADMIN_OR_AGENT_DEP,
 ) -> SoulsDirectorySearchResponse:
+    """Search souls-directory entries by handle/slug query text."""
     refs = await souls_directory.list_souls_directory_refs()
     matches = souls_directory.search_souls(refs, query=q, limit=limit)
     items = [
@@ -62,12 +66,23 @@ async def search(
 async def get_markdown(
     handle: str,
     slug: str,
-    _actor: ActorContext = Depends(require_admin_or_agent),
+    _actor: ActorContext = ADMIN_OR_AGENT_DEP,
 ) -> SoulsDirectoryMarkdownResponse:
+    """Fetch markdown content for a validated souls-directory handle and slug."""
     safe_handle = _validate_segment(handle, field="handle")
     safe_slug = _validate_segment(slug.removesuffix(".md"), field="slug")
     try:
-        content = await souls_directory.fetch_soul_markdown(handle=safe_handle, slug=safe_slug)
+        content = await souls_directory.fetch_soul_markdown(
+            handle=safe_handle,
+            slug=safe_slug,
+        )
     except Exception as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-    return SoulsDirectoryMarkdownResponse(handle=safe_handle, slug=safe_slug, content=content)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
+    return SoulsDirectoryMarkdownResponse(
+        handle=safe_handle,
+        slug=safe_slug,
+        content=content,
+    )

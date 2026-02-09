@@ -1,3 +1,5 @@
+"""OpenClaw gateway protocol constants shared across integration layers."""
+
 from __future__ import annotations
 
 PROTOCOL_VERSION = 3
@@ -116,4 +118,5 @@ GATEWAY_EVENTS_SET = frozenset(GATEWAY_EVENTS)
 
 
 def is_known_gateway_method(method: str) -> bool:
+    """Return whether a method name is part of the known base gateway methods."""
     return method in GATEWAY_METHODS_SET

@@ -1,6 +1,8 @@
+"""Organization model representing top-level tenant entities."""
+
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime  # noqa: TCH003
 from uuid import UUID, uuid4
 
 from sqlalchemy import UniqueConstraint
@@ -11,6 +13,8 @@ from app.models.base import QueryModel
 
 
 class Organization(QueryModel, table=True):
+    """Top-level organization tenant record."""
+
     __tablename__ = "organizations"
     __table_args__ = (UniqueConstraint("name", name="uq_organizations_name"),)
 

@@ -1,32 +1,42 @@
+"""User authentication helpers backed by Clerk JWT verification."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi_clerk_auth import ClerkConfig, ClerkHTTPBearer
 from fastapi_clerk_auth import HTTPAuthorizationCredentials as ClerkCredentials
 from pydantic import BaseModel, ValidationError
-from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.config import settings
 from app.db import crud
 from app.db.session import get_session
 from app.models.users import User
 
+if TYPE_CHECKING:
+    from sqlmodel.ext.asyncio.session import AsyncSession
+
 security = HTTPBearer(auto_error=False)
+SECURITY_DEP = Depends(security)
+SESSION_DEP = Depends(get_session)
+CLERK_JWKS_URL_REQUIRED_ERROR = "CLERK_JWKS_URL is not set."
 
 
 class ClerkTokenPayload(BaseModel):
+    """JWT claims payload shape required from Clerk tokens."""
+
     sub: str
 
 
 @lru_cache
-def _build_clerk_http_bearer(auto_error: bool) -> ClerkHTTPBearer:
+def _build_clerk_http_bearer(*, auto_error: bool) -> ClerkHTTPBearer:
+    """Create and cache the Clerk HTTP bearer guard."""
     if not settings.clerk_jwks_url:
-        raise RuntimeError("CLERK_JWKS_URL is not set.")
+        raise RuntimeError(CLERK_JWKS_URL_REQUIRED_ERROR)
     clerk_config = ClerkConfig(
         jwks_url=settings.clerk_jwks_url,
         verify_iat=settings.clerk_verify_iat,
@@ -37,12 +47,15 @@ def _build_clerk_http_bearer(auto_error: bool) -> ClerkHTTPBearer:
 
 @dataclass
 class AuthContext:
+    """Authenticated user context resolved from inbound auth headers."""
+
     actor_type: Literal["user"]
     user: User | None = None
 
 
 def _resolve_clerk_auth(
-    request: Request, fallback: ClerkCredentials | None
+    request: Request,
+    fallback: ClerkCredentials | None,
 ) -> ClerkCredentials | None:
     auth_data = getattr(request.state, "clerk_auth", None)
     if isinstance(auth_data, ClerkCredentials):
@@ -59,9 +72,10 @@ def _parse_subject(auth_data: ClerkCredentials | None) -> str | None:
 
 async def get_auth_context(
     request: Request,
-    credentials: HTTPAuthorizationCredentials | None = Depends(security),
-    session: AsyncSession = Depends(get_session),
+    credentials: HTTPAuthorizationCredentials | None = SECURITY_DEP,
+    session: AsyncSession = SESSION_DEP,
 ) -> AuthContext:
+    """Resolve required authenticated user context from Clerk JWT headers."""
     if credentials is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
 
@@ -109,9 +123,10 @@ async def get_auth_context(
 
 async def get_auth_context_optional(
     request: Request,
-    credentials: HTTPAuthorizationCredentials | None = Depends(security),
-    session: AsyncSession = Depends(get_session),
+    credentials: HTTPAuthorizationCredentials | None = SECURITY_DEP,
+    session: AsyncSession = SESSION_DEP,
 ) -> AuthContext | None:
+    """Resolve user context if available, otherwise return `None`."""
     if request.headers.get("X-Agent-Token"):
         return None
     if credentials is None:

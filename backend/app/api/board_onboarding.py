@@ -1,13 +1,16 @@
+"""Board onboarding endpoints for user/agent collaboration."""
+# ruff: noqa: E501
+
 from __future__ import annotations
 
 import logging
 import re
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import ValidationError
 from sqlmodel import col
-from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.api.deps import (
     ActorContext,
@@ -18,15 +21,17 @@ from app.api.deps import (
     require_admin_or_agent,
 )
 from app.core.agent_tokens import generate_agent_token, hash_agent_token
-from app.core.auth import AuthContext
 from app.core.config import settings
 from app.core.time import utcnow
 from app.db.session import get_session
 from app.integrations.openclaw_gateway import GatewayConfig as GatewayClientConfig
-from app.integrations.openclaw_gateway import OpenClawGatewayError, ensure_session, send_message
+from app.integrations.openclaw_gateway import (
+    OpenClawGatewayError,
+    ensure_session,
+    send_message,
+)
 from app.models.agents import Agent
 from app.models.board_onboarding import BoardOnboardingSession
-from app.models.boards import Board
 from app.models.gateways import Gateway
 from app.schemas.board_onboarding import (
     BoardOnboardingAgentComplete,
@@ -41,12 +46,24 @@ from app.schemas.board_onboarding import (
 from app.schemas.boards import BoardRead
 from app.services.agent_provisioning import DEFAULT_HEARTBEAT_CONFIG, provision_agent
 
+if TYPE_CHECKING:
+    from sqlmodel.ext.asyncio.session import AsyncSession
+
+    from app.core.auth import AuthContext
+    from app.models.boards import Board
+
 router = APIRouter(prefix="/boards/{board_id}/onboarding", tags=["board-onboarding"])
 logger = logging.getLogger(__name__)
+BOARD_USER_READ_DEP = Depends(get_board_for_user_read)
+BOARD_USER_WRITE_DEP = Depends(get_board_for_user_write)
+BOARD_OR_404_DEP = Depends(get_board_or_404)
+SESSION_DEP = Depends(get_session)
+ACTOR_DEP = Depends(require_admin_or_agent)
+ADMIN_AUTH_DEP = Depends(require_admin_auth)
 
 
 async def _gateway_config(
-    session: AsyncSession, board: Board
+    session: AsyncSession, board: Board,
 ) -> tuple[Gateway, GatewayClientConfig]:
     if not board.gateway_id:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY)
@@ -61,7 +78,7 @@ def _build_session_key(agent_name: str) -> str:
     return f"agent:{slug or uuid4().hex}:main"
 
 
-def _lead_agent_name(board: Board) -> str:
+def _lead_agent_name(_board: Board) -> str:
     return "Lead Agent"
 
 
@@ -69,7 +86,7 @@ def _lead_session_key(board: Board) -> str:
     return f"agent:lead-{board.id}:main"
 
 
-async def _ensure_lead_agent(
+async def _ensure_lead_agent(  # noqa: PLR0913
     session: AsyncSession,
     board: Board,
     gateway: Gateway,
@@ -100,7 +117,11 @@ async def _ensure_lead_agent(
     }
     if identity_profile:
         merged_identity_profile.update(
-            {key: value.strip() for key, value in identity_profile.items() if value.strip()}
+            {
+                key: value.strip()
+                for key, value in identity_profile.items()
+                if value.strip()
+            },
         )
 
     agent = Agent(
@@ -121,7 +142,9 @@ async def _ensure_lead_agent(
     await session.refresh(agent)
 
     try:
-        await provision_agent(agent, board, gateway, raw_token, auth.user, action="provision")
+        await provision_agent(
+            agent, board, gateway, raw_token, auth.user, action="provision",
+        )
         await ensure_session(agent.openclaw_session_id, config=config, label=agent.name)
         await send_message(
             (
@@ -141,9 +164,10 @@ async def _ensure_lead_agent(
 
 @router.get("", response_model=BoardOnboardingRead)
 async def get_onboarding(
-    board: Board = Depends(get_board_for_user_read),
-    session: AsyncSession = Depends(get_session),
+    board: Board = BOARD_USER_READ_DEP,
+    session: AsyncSession = SESSION_DEP,
 ) -> BoardOnboardingSession:
+    """Get the latest onboarding session for a board."""
     onboarding = (
         await BoardOnboardingSession.objects.filter_by(board_id=board.id)
         .order_by(col(BoardOnboardingSession.updated_at).desc())
@@ -156,10 +180,11 @@ async def get_onboarding(
 
 @router.post("/start", response_model=BoardOnboardingRead)
 async def start_onboarding(
-    payload: BoardOnboardingStart,
-    board: Board = Depends(get_board_for_user_write),
-    session: AsyncSession = Depends(get_session),
+    _payload: BoardOnboardingStart,
+    board: Board = BOARD_USER_WRITE_DEP,
+    session: AsyncSession = SESSION_DEP,
 ) -> BoardOnboardingSession:
+    """Start onboarding and send instructions to the gateway main agent."""
     onboarding = (
         await BoardOnboardingSession.objects.filter_by(board_id=board.id)
         .filter(col(BoardOnboardingSession.status) == "active")
@@ -219,15 +244,21 @@ async def start_onboarding(
 
     try:
         await ensure_session(session_key, config=config, label="Main Agent")
-        await send_message(prompt, session_key=session_key, config=config, deliver=False)
+        await send_message(
+            prompt, session_key=session_key, config=config, deliver=False,
+        )
     except OpenClawGatewayError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc),
+        ) from exc
 
     onboarding = BoardOnboardingSession(
         board_id=board.id,
         session_key=session_key,
         status="active",
-        messages=[{"role": "user", "content": prompt, "timestamp": utcnow().isoformat()}],
+        messages=[
+            {"role": "user", "content": prompt, "timestamp": utcnow().isoformat()},
+        ],
     )
     session.add(onboarding)
     await session.commit()
@@ -238,9 +269,10 @@ async def start_onboarding(
 @router.post("/answer", response_model=BoardOnboardingRead)
 async def answer_onboarding(
     payload: BoardOnboardingAnswer,
-    board: Board = Depends(get_board_for_user_write),
-    session: AsyncSession = Depends(get_session),
+    board: Board = BOARD_USER_WRITE_DEP,
+    session: AsyncSession = SESSION_DEP,
 ) -> BoardOnboardingSession:
+    """Send a user onboarding answer to the gateway main agent."""
     onboarding = (
         await BoardOnboardingSession.objects.filter_by(board_id=board.id)
         .order_by(col(BoardOnboardingSession.updated_at).desc())
@@ -255,15 +287,22 @@ async def answer_onboarding(
         answer_text = f"{payload.answer}: {payload.other_text}"
 
     messages = list(onboarding.messages or [])
-    messages.append({"role": "user", "content": answer_text, "timestamp": utcnow().isoformat()})
+    messages.append(
+        {"role": "user", "content": answer_text, "timestamp": utcnow().isoformat()},
+    )
 
     try:
         await ensure_session(onboarding.session_key, config=config, label="Main Agent")
         await send_message(
-            answer_text, session_key=onboarding.session_key, config=config, deliver=False
+            answer_text,
+            session_key=onboarding.session_key,
+            config=config,
+            deliver=False,
         )
     except OpenClawGatewayError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc),
+        ) from exc
 
     onboarding.messages = messages
     onboarding.updated_at = utcnow()
@@ -276,10 +315,11 @@ async def answer_onboarding(
 @router.post("/agent", response_model=BoardOnboardingRead)
 async def agent_onboarding_update(
     payload: BoardOnboardingAgentUpdate,
-    board: Board = Depends(get_board_or_404),
-    session: AsyncSession = Depends(get_session),
-    actor: ActorContext = Depends(require_admin_or_agent),
+    board: Board = BOARD_OR_404_DEP,
+    session: AsyncSession = SESSION_DEP,
+    actor: ActorContext = ACTOR_DEP,
 ) -> BoardOnboardingSession:
+    """Store onboarding updates submitted by the gateway main agent."""
     if actor.actor_type != "agent" or actor.agent is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
     agent = actor.agent
@@ -288,9 +328,13 @@ async def agent_onboarding_update(
 
     if board.gateway_id:
         gateway = await Gateway.objects.by_id(board.gateway_id).first(session)
-        if gateway and gateway.main_session_key and agent.openclaw_session_id:
-            if agent.openclaw_session_id != gateway.main_session_key:
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
+        if (
+            gateway
+            and gateway.main_session_key
+            and agent.openclaw_session_id
+            and agent.openclaw_session_id != gateway.main_session_key
+        ):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
 
     onboarding = (
         await BoardOnboardingSession.objects.filter_by(board_id=board.id)
@@ -315,9 +359,13 @@ async def agent_onboarding_update(
     if isinstance(payload, BoardOnboardingAgentComplete):
         onboarding.draft_goal = payload_data
         onboarding.status = "completed"
-        messages.append({"role": "assistant", "content": payload_text, "timestamp": now})
+        messages.append(
+            {"role": "assistant", "content": payload_text, "timestamp": now},
+        )
     else:
-        messages.append({"role": "assistant", "content": payload_text, "timestamp": now})
+        messages.append(
+            {"role": "assistant", "content": payload_text, "timestamp": now},
+        )
 
     onboarding.messages = messages
     onboarding.updated_at = utcnow()
@@ -334,12 +382,13 @@ async def agent_onboarding_update(
 
 
 @router.post("/confirm", response_model=BoardRead)
-async def confirm_onboarding(
+async def confirm_onboarding(  # noqa: C901, PLR0912, PLR0915
     payload: BoardOnboardingConfirm,
-    board: Board = Depends(get_board_for_user_write),
-    session: AsyncSession = Depends(get_session),
-    auth: AuthContext = Depends(require_admin_auth),
+    board: Board = BOARD_USER_WRITE_DEP,
+    session: AsyncSession = SESSION_DEP,
+    auth: AuthContext = ADMIN_AUTH_DEP,
 ) -> Board:
+    """Confirm onboarding results and provision the board lead agent."""
     onboarding = (
         await BoardOnboardingSession.objects.filter_by(board_id=board.id)
         .order_by(col(BoardOnboardingSession.updated_at).desc())
@@ -409,7 +458,9 @@ async def confirm_onboarding(
         if lead_agent.update_cadence:
             lead_identity_profile["update_cadence"] = lead_agent.update_cadence
         if lead_agent.custom_instructions:
-            lead_identity_profile["custom_instructions"] = lead_agent.custom_instructions
+            lead_identity_profile["custom_instructions"] = (
+                lead_agent.custom_instructions
+            )
 
     gateway, config = await _gateway_config(session, board)
     session.add(board)

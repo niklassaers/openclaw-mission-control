@@ -1,6 +1,8 @@
+"""Task model representing board work items and execution metadata."""
+
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime  # noqa: TCH003
 from uuid import UUID, uuid4
 
 from sqlmodel import Field
@@ -10,6 +12,8 @@ from app.models.tenancy import TenantScoped
 
 
 class Task(TenantScoped, table=True):
+    """Board-scoped task entity with ownership, status, and timing fields."""
+
     __tablename__ = "tasks"
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
@@ -22,8 +26,16 @@ class Task(TenantScoped, table=True):
     due_at: datetime | None = None
     in_progress_at: datetime | None = None
 
-    created_by_user_id: UUID | None = Field(default=None, foreign_key="users.id", index=True)
-    assigned_agent_id: UUID | None = Field(default=None, foreign_key="agents.id", index=True)
+    created_by_user_id: UUID | None = Field(
+        default=None,
+        foreign_key="users.id",
+        index=True,
+    )
+    assigned_agent_id: UUID | None = Field(
+        default=None,
+        foreign_key="agents.id",
+        index=True,
+    )
     auto_created: bool = Field(default=False)
     auto_reason: str | None = None
 

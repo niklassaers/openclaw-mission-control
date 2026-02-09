@@ -1,41 +1,54 @@
+"""API-level thin wrapper around query-set helpers with HTTP conveniences."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Generic, TypeVar
 
 from fastapi import HTTPException, status
-from sqlmodel.ext.asyncio.session import AsyncSession
-from sqlmodel.sql.expression import SelectOfScalar
 
 from app.db.queryset import QuerySet, qs
+
+if TYPE_CHECKING:
+    from sqlmodel.ext.asyncio.session import AsyncSession
+    from sqlmodel.sql.expression import SelectOfScalar
 
 ModelT = TypeVar("ModelT")
 
 
 @dataclass(frozen=True)
 class APIQuerySet(Generic[ModelT]):
+    """Immutable query-set wrapper tailored for API-layer usage."""
+
     queryset: QuerySet[ModelT]
 
     @property
     def statement(self) -> SelectOfScalar[ModelT]:
+        """Expose the underlying SQL statement for advanced composition."""
         return self.queryset.statement
 
-    def filter(self, *criteria: Any) -> APIQuerySet[ModelT]:
+    def filter(self, *criteria: object) -> APIQuerySet[ModelT]:
+        """Return a new queryset with additional SQL criteria applied."""
         return APIQuerySet(self.queryset.filter(*criteria))
 
-    def order_by(self, *ordering: Any) -> APIQuerySet[ModelT]:
+    def order_by(self, *ordering: object) -> APIQuerySet[ModelT]:
+        """Return a new queryset with ordering clauses applied."""
         return APIQuerySet(self.queryset.order_by(*ordering))
 
     def limit(self, value: int) -> APIQuerySet[ModelT]:
+        """Return a new queryset with a row limit applied."""
         return APIQuerySet(self.queryset.limit(value))
 
     def offset(self, value: int) -> APIQuerySet[ModelT]:
+        """Return a new queryset with an offset applied."""
         return APIQuerySet(self.queryset.offset(value))
 
     async def all(self, session: AsyncSession) -> list[ModelT]:
+        """Fetch all rows for the current queryset."""
         return await self.queryset.all(session)
 
     async def first(self, session: AsyncSession) -> ModelT | None:
+        """Fetch the first row for the current queryset, if present."""
         return await self.queryset.first(session)
 
     async def first_or_404(
@@ -44,6 +57,7 @@ class APIQuerySet(Generic[ModelT]):
         *,
         detail: str | None = None,
     ) -> ModelT:
+        """Fetch the first row or raise HTTP 404 when no row exists."""
         obj = await self.first(session)
         if obj is not None:
             return obj
@@ -53,4 +67,5 @@ class APIQuerySet(Generic[ModelT]):
 
 
 def api_qs(model: type[ModelT]) -> APIQuerySet[ModelT]:
+    """Create an APIQuerySet for a SQLModel class."""
     return APIQuerySet(qs(model))

@@ -1,14 +1,17 @@
+"""Schemas for gateway CRUD and template-sync API payloads."""
+
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any
-from uuid import UUID
+from datetime import datetime  # noqa: TCH003
+from uuid import UUID  # noqa: TCH003
 
 from pydantic import field_validator
 from sqlmodel import Field, SQLModel
 
 
 class GatewayBase(SQLModel):
+    """Shared gateway fields used across create/read payloads."""
+
     name: str
     url: str
     main_session_key: str
@@ -16,11 +19,14 @@ class GatewayBase(SQLModel):
 
 
 class GatewayCreate(GatewayBase):
+    """Payload for creating a gateway configuration."""
+
     token: str | None = None
 
     @field_validator("token", mode="before")
     @classmethod
-    def normalize_token(cls, value: Any) -> Any:
+    def normalize_token(cls, value: object) -> str | None | object:
+        """Normalize empty/whitespace tokens to `None`."""
         if value is None:
             return None
         if isinstance(value, str):
@@ -30,6 +36,8 @@ class GatewayCreate(GatewayBase):
 
 
 class GatewayUpdate(SQLModel):
+    """Payload for partial gateway updates."""
+
     name: str | None = None
     url: str | None = None
     token: str | None = None
@@ -38,7 +46,8 @@ class GatewayUpdate(SQLModel):
 
     @field_validator("token", mode="before")
     @classmethod
-    def normalize_token(cls, value: Any) -> Any:
+    def normalize_token(cls, value: object) -> str | None | object:
+        """Normalize empty/whitespace tokens to `None`."""
         if value is None:
             return None
         if isinstance(value, str):
@@ -48,6 +57,8 @@ class GatewayUpdate(SQLModel):
 
 
 class GatewayRead(GatewayBase):
+    """Gateway payload returned from read endpoints."""
+
     id: UUID
     organization_id: UUID
     token: str | None = None
@@ -56,6 +67,8 @@ class GatewayRead(GatewayBase):
 
 
 class GatewayTemplatesSyncError(SQLModel):
+    """Per-agent error entry from a gateway template sync operation."""
+
     agent_id: UUID | None = None
     agent_name: str | None = None
     board_id: UUID | None = None
@@ -63,6 +76,8 @@ class GatewayTemplatesSyncError(SQLModel):
 
 
 class GatewayTemplatesSyncResult(SQLModel):
+    """Summary payload returned by gateway template sync endpoints."""
+
     gateway_id: UUID
     include_main: bool
     reset_sessions: bool

@@ -1,18 +1,23 @@
+"""Schemas for task CRUD and task comment API payloads."""
+
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any, Literal, Self
-from uuid import UUID
+from datetime import datetime  # noqa: TCH003
+from typing import Literal, Self
+from uuid import UUID  # noqa: TCH003
 
 from pydantic import field_validator, model_validator
 from sqlmodel import Field, SQLModel
 
-from app.schemas.common import NonEmptyStr
+from app.schemas.common import NonEmptyStr  # noqa: TCH001
 
 TaskStatus = Literal["inbox", "in_progress", "review", "done"]
+STATUS_REQUIRED_ERROR = "status is required"
 
 
 class TaskBase(SQLModel):
+    """Shared task fields used by task create/read payloads."""
+
     title: str
     description: str | None = None
     status: TaskStatus = "inbox"
@@ -23,10 +28,14 @@ class TaskBase(SQLModel):
 
 
 class TaskCreate(TaskBase):
+    """Payload for creating a task."""
+
     created_by_user_id: UUID | None = None
 
 
 class TaskUpdate(SQLModel):
+    """Payload for partial task updates."""
+
     title: str | None = None
     description: str | None = None
     status: TaskStatus | None = None
@@ -38,7 +47,8 @@ class TaskUpdate(SQLModel):
 
     @field_validator("comment", mode="before")
     @classmethod
-    def normalize_comment(cls, value: Any) -> Any:
+    def normalize_comment(cls, value: object) -> object | None:
+        """Normalize blank comment strings to `None`."""
         if value is None:
             return None
         if isinstance(value, str) and not value.strip():
@@ -47,12 +57,15 @@ class TaskUpdate(SQLModel):
 
     @model_validator(mode="after")
     def validate_status(self) -> Self:
+        """Ensure explicitly supplied status is not null."""
         if "status" in self.model_fields_set and self.status is None:
-            raise ValueError("status is required")
+            raise ValueError(STATUS_REQUIRED_ERROR)
         return self
 
 
 class TaskRead(TaskBase):
+    """Task payload returned from read endpoints."""
+
     id: UUID
     board_id: UUID | None
     created_by_user_id: UUID | None
@@ -64,10 +77,14 @@ class TaskRead(TaskBase):
 
 
 class TaskCommentCreate(SQLModel):
+    """Payload for creating a task comment."""
+
     message: NonEmptyStr
 
 
 class TaskCommentRead(SQLModel):
+    """Task comment payload returned from read endpoints."""
+
     id: UUID
     message: str | None
     agent_id: UUID | None

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from dataclasses import dataclass
 
 from starlette.requests import Request
@@ -26,7 +24,11 @@ class ClerkHTTPBearer:
     def __init__(
         self,
         config: ClerkConfig,
+        *,
         auto_error: bool = ...,
         add_state: bool = ...,
     ) -> None: ...
-    async def __call__(self, request: Request) -> HTTPAuthorizationCredentials | None: ...
+    async def __call__(
+        self,
+        request: Request,
+    ) -> HTTPAuthorizationCredentials | None: ...

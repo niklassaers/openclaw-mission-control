@@ -1,3 +1,5 @@
+"""Agent lifecycle, listing, heartbeat, and deletion API endpoints."""
+
 from __future__ import annotations
 
 import asyncio
@@ -5,14 +7,12 @@ import json
 import re
 from collections.abc import AsyncIterator, Sequence
 from datetime import datetime, timedelta, timezone
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import asc, or_
-from sqlalchemy.sql.elements import ColumnElement
 from sqlmodel import col, select
-from sqlmodel.ext.asyncio.session import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
 from app.api.deps import ActorContext, require_admin_or_agent, require_org_admin
@@ -23,14 +23,17 @@ from app.db import crud
 from app.db.pagination import paginate
 from app.db.session import async_session_maker, get_session
 from app.integrations.openclaw_gateway import GatewayConfig as GatewayClientConfig
-from app.integrations.openclaw_gateway import OpenClawGatewayError, ensure_session, send_message
+from app.integrations.openclaw_gateway import (
+    OpenClawGatewayError,
+    ensure_session,
+    send_message,
+)
 from app.models.activity_events import ActivityEvent
 from app.models.agents import Agent
 from app.models.boards import Board
 from app.models.gateways import Gateway
 from app.models.organizations import Organization
 from app.models.tasks import Task
-from app.models.users import User
 from app.schemas.agents import (
     AgentCreate,
     AgentHeartbeat,
@@ -56,10 +59,23 @@ from app.services.organizations import (
     require_board_access,
 )
 
+if TYPE_CHECKING:
+    from sqlalchemy.sql.elements import ColumnElement
+    from sqlmodel.ext.asyncio.session import AsyncSession
+
+    from app.models.users import User
+
 router = APIRouter(prefix="/agents", tags=["agents"])
 
 OFFLINE_AFTER = timedelta(minutes=10)
 AGENT_SESSION_PREFIX = "agent"
+BOARD_ID_QUERY = Query(default=None)
+GATEWAY_ID_QUERY = Query(default=None)
+SINCE_QUERY = Query(default=None)
+SESSION_DEP = Depends(get_session)
+ORG_ADMIN_DEP = Depends(require_org_admin)
+ACTOR_DEP = Depends(require_admin_or_agent)
+AUTH_DEP = Depends(get_auth_context)
 
 
 def _parse_since(value: str | None) -> datetime | None:
@@ -111,14 +127,16 @@ async def _require_board(
         )
     board = await Board.objects.by_id(board_id).first(session)
     if board is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Board not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Board not found",
+        )
     if user is not None:
         await require_board_access(session, user=user, board=board, write=write)
     return board
 
 
 async def _require_gateway(
-    session: AsyncSession, board: Board
+    session: AsyncSession, board: Board,
 ) -> tuple[Gateway, GatewayClientConfig]:
     if not board.gateway_id:
         raise HTTPException(
@@ -169,16 +187,20 @@ async def _get_gateway_main_session_keys(session: AsyncSession) -> set[str]:
 
 
 def _is_gateway_main(agent: Agent, main_session_keys: set[str]) -> bool:
-    return bool(agent.openclaw_session_id and agent.openclaw_session_id in main_session_keys)
+    return bool(
+        agent.openclaw_session_id and agent.openclaw_session_id in main_session_keys,
+    )
 
 
 def _to_agent_read(agent: Agent, main_session_keys: set[str]) -> AgentRead:
     model = AgentRead.model_validate(agent, from_attributes=True)
-    return model.model_copy(update={"is_gateway_main": _is_gateway_main(agent, main_session_keys)})
+    return model.model_copy(
+        update={"is_gateway_main": _is_gateway_main(agent, main_session_keys)},
+    )
 
 
 async def _find_gateway_for_main_session(
-    session: AsyncSession, session_key: str | None
+    session: AsyncSession, session_key: str | None,
 ) -> Gateway | None:
     if not session_key:
         return None
@@ -210,7 +232,9 @@ def _with_computed_status(agent: Agent) -> Agent:
 
 
 def _serialize_agent(agent: Agent, main_session_keys: set[str]) -> dict[str, object]:
-    return _to_agent_read(_with_computed_status(agent), main_session_keys).model_dump(mode="json")
+    return _to_agent_read(_with_computed_status(agent), main_session_keys).model_dump(
+        mode="json",
+    )
 
 
 async def _fetch_agent_events(
@@ -225,18 +249,22 @@ async def _fetch_agent_events(
         or_(
             col(Agent.updated_at) >= since,
             col(Agent.last_seen_at) >= since,
-        )
+        ),
     ).order_by(asc(col(Agent.updated_at)))
     return list(await session.exec(statement))
 
 
-async def _require_user_context(session: AsyncSession, user: User | None) -> OrganizationContext:
+async def _require_user_context(
+    session: AsyncSession, user: User | None,
+) -> OrganizationContext:
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
     member = await get_active_membership(session, user)
     if member is None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
-    organization = await Organization.objects.by_id(member.organization_id).first(session)
+    organization = await Organization.objects.by_id(member.organization_id).first(
+        session,
+    )
     if organization is None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
     return OrganizationContext(organization=organization, member=member)
@@ -252,7 +280,9 @@ async def _require_agent_access(
     if agent.board_id is None:
         if not is_org_admin(ctx.member):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
-        gateway = await _find_gateway_for_main_session(session, agent.openclaw_session_id)
+        gateway = await _find_gateway_for_main_session(
+            session, agent.openclaw_session_id,
+        )
         if gateway is None or gateway.organization_id != ctx.organization.id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
         return
@@ -274,7 +304,7 @@ def _record_heartbeat(session: AsyncSession, agent: Agent) -> None:
 
 
 def _record_instruction_failure(
-    session: AsyncSession, agent: Agent, error: str, action: str
+    session: AsyncSession, agent: Agent, error: str, action: str,
 ) -> None:
     action_label = action.replace("_", " ").capitalize()
     record_activity(
@@ -286,7 +316,7 @@ def _record_instruction_failure(
 
 
 async def _send_wakeup_message(
-    agent: Agent, config: GatewayClientConfig, verb: str = "provisioned"
+    agent: Agent, config: GatewayClientConfig, verb: str = "provisioned",
 ) -> None:
     session_key = agent.openclaw_session_id or _build_session_key(agent.name)
     await ensure_session(session_key, config=config, label=agent.name)
@@ -300,11 +330,12 @@ async def _send_wakeup_message(
 
 @router.get("", response_model=DefaultLimitOffsetPage[AgentRead])
 async def list_agents(
-    board_id: UUID | None = Query(default=None),
-    gateway_id: UUID | None = Query(default=None),
-    session: AsyncSession = Depends(get_session),
-    ctx: OrganizationContext = Depends(require_org_admin),
+    board_id: UUID | None = BOARD_ID_QUERY,
+    gateway_id: UUID | None = GATEWAY_ID_QUERY,
+    session: AsyncSession = SESSION_DEP,
+    ctx: OrganizationContext = ORG_ADMIN_DEP,
 ) -> DefaultLimitOffsetPage[AgentRead]:
+    """List agents visible to the active organization admin."""
     main_session_keys = await _get_gateway_main_session_keys(session)
     board_ids = await list_accessible_board_ids(session, member=ctx.member, write=False)
     if board_id is not None and board_id not in set(board_ids):
@@ -315,9 +346,11 @@ async def list_agents(
         base_filter: ColumnElement[bool] = col(Agent.board_id).in_(board_ids)
         if is_org_admin(ctx.member):
             gateway_keys = select(Gateway.main_session_key).where(
-                col(Gateway.organization_id) == ctx.organization.id
+                col(Gateway.organization_id) == ctx.organization.id,
             )
-            base_filter = or_(base_filter, col(Agent.openclaw_session_id).in_(gateway_keys))
+            base_filter = or_(
+                base_filter, col(Agent.openclaw_session_id).in_(gateway_keys),
+            )
         statement = select(Agent).where(base_filter)
     if board_id is not None:
         statement = statement.where(col(Agent.board_id) == board_id)
@@ -326,13 +359,16 @@ async def list_agents(
         if gateway is None or gateway.organization_id != ctx.organization.id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
         statement = statement.join(Board, col(Agent.board_id) == col(Board.id)).where(
-            col(Board.gateway_id) == gateway_id
+            col(Board.gateway_id) == gateway_id,
         )
     statement = statement.order_by(col(Agent.created_at).desc())
 
     def _transform(items: Sequence[Any]) -> Sequence[Any]:
         agents = cast(Sequence[Agent], items)
-        return [_to_agent_read(_with_computed_status(agent), main_session_keys) for agent in agents]
+        return [
+            _to_agent_read(_with_computed_status(agent), main_session_keys)
+            for agent in agents
+        ]
 
     return await paginate(session, statement, transformer=_transform)
 
@@ -340,11 +376,12 @@ async def list_agents(
 @router.get("/stream")
 async def stream_agents(
     request: Request,
-    board_id: UUID | None = Query(default=None),
-    since: str | None = Query(default=None),
-    session: AsyncSession = Depends(get_session),
-    ctx: OrganizationContext = Depends(require_org_admin),
+    board_id: UUID | None = BOARD_ID_QUERY,
+    since: str | None = SINCE_QUERY,
+    session: AsyncSession = SESSION_DEP,
+    ctx: OrganizationContext = ORG_ADMIN_DEP,
 ) -> EventSourceResponse:
+    """Stream agent updates as SSE events."""
     since_dt = _parse_since(since) or utcnow()
     last_seen = since_dt
     board_ids = await list_accessible_board_ids(session, member=ctx.member, write=False)
@@ -359,14 +396,20 @@ async def stream_agents(
                 break
             async with async_session_maker() as stream_session:
                 if board_id is not None:
-                    agents = await _fetch_agent_events(stream_session, board_id, last_seen)
+                    agents = await _fetch_agent_events(
+                        stream_session, board_id, last_seen,
+                    )
                 elif allowed_ids:
                     agents = await _fetch_agent_events(stream_session, None, last_seen)
-                    agents = [agent for agent in agents if agent.board_id in allowed_ids]
+                    agents = [
+                        agent for agent in agents if agent.board_id in allowed_ids
+                    ]
                 else:
                     agents = []
                 main_session_keys = (
-                    await _get_gateway_main_session_keys(stream_session) if agents else set()
+                    await _get_gateway_main_session_keys(stream_session)
+                    if agents
+                    else set()
                 )
             for agent in agents:
                 updated_at = agent.updated_at or agent.last_seen_at or utcnow()
@@ -379,11 +422,12 @@ async def stream_agents(
 
 
 @router.post("", response_model=AgentRead)
-async def create_agent(
+async def create_agent(  # noqa: C901, PLR0912, PLR0915
     payload: AgentCreate,
-    session: AsyncSession = Depends(get_session),
-    actor: ActorContext = Depends(require_admin_or_agent),
+    session: AsyncSession = SESSION_DEP,
+    actor: ActorContext = ACTOR_DEP,
 ) -> AgentRead:
+    """Create and provision an agent."""
     if actor.actor_type == "user":
         ctx = await _require_user_context(session, actor.user)
         if not is_org_admin(ctx.member):
@@ -404,7 +448,9 @@ async def create_agent(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Board leads can only create agents in their own board",
             )
-        payload = AgentCreate(**{**payload.model_dump(), "board_id": actor.agent.board_id})
+        payload = AgentCreate(
+            **{**payload.model_dump(), "board_id": actor.agent.board_id},
+        )
 
     board = await _require_board(
         session,
@@ -420,7 +466,7 @@ async def create_agent(
             await session.exec(
                 select(Agent)
                 .where(Agent.board_id == board.id)
-                .where(col(Agent.name).ilike(requested_name))
+                .where(col(Agent.name).ilike(requested_name)),
             )
         ).first()
         if existing:
@@ -428,20 +474,23 @@ async def create_agent(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="An agent with this name already exists on this board.",
             )
-        # Prevent OpenClaw session/workspace collisions by enforcing uniqueness within
-        # the gateway workspace too (agents on other boards share the same gateway root).
+        # Prevent session/workspace collisions inside the gateway workspace.
+        # Agents on different boards can still share one gateway root.
         existing_gateway = (
             await session.exec(
                 select(Agent)
                 .join(Board, col(Agent.board_id) == col(Board.id))
                 .where(col(Board.gateway_id) == gateway.id)
-                .where(col(Agent.name).ilike(requested_name))
+                .where(col(Agent.name).ilike(requested_name)),
             )
         ).first()
         if existing_gateway:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="An agent with this name already exists in this gateway workspace.",
+                detail=(
+                    "An agent with this name already exists in this gateway "
+                    "workspace."
+                ),
             )
         desired_session_key = _build_session_key(requested_name)
         existing_session_key = (
@@ -449,13 +498,16 @@ async def create_agent(
                 select(Agent)
                 .join(Board, col(Agent.board_id) == col(Board.id))
                 .where(col(Board.gateway_id) == gateway.id)
-                .where(col(Agent.openclaw_session_id) == desired_session_key)
+                .where(col(Agent.openclaw_session_id) == desired_session_key),
             )
         ).first()
         if existing_session_key:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="This agent name would collide with an existing workspace session key. Pick a different name.",
+                detail=(
+                    "This agent name would collide with an existing workspace "
+                    "session key. Pick a different name."
+                ),
             )
     agent = Agent.model_validate(data)
     agent.status = "provisioning"
@@ -465,7 +517,9 @@ async def create_agent(
         agent.heartbeat_config = DEFAULT_HEARTBEAT_CONFIG.copy()
     agent.provision_requested_at = utcnow()
     agent.provision_action = "provision"
-    session_key, session_error = await _ensure_gateway_session(agent.name, client_config)
+    session_key, session_error = await _ensure_gateway_session(
+        agent.name, client_config,
+    )
     agent.openclaw_session_id = session_key
     session.add(agent)
     await session.commit()
@@ -527,9 +581,10 @@ async def create_agent(
 @router.get("/{agent_id}", response_model=AgentRead)
 async def get_agent(
     agent_id: str,
-    session: AsyncSession = Depends(get_session),
-    ctx: OrganizationContext = Depends(require_org_admin),
+    session: AsyncSession = SESSION_DEP,
+    ctx: OrganizationContext = ORG_ADMIN_DEP,
 ) -> AgentRead:
+    """Get a single agent by id."""
     agent = await Agent.objects.by_id(agent_id).first(session)
     if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
@@ -539,14 +594,16 @@ async def get_agent(
 
 
 @router.patch("/{agent_id}", response_model=AgentRead)
-async def update_agent(
+async def update_agent(  # noqa: C901, PLR0912, PLR0913, PLR0915
     agent_id: str,
     payload: AgentUpdate,
+    *,
     force: bool = False,
-    session: AsyncSession = Depends(get_session),
-    auth: AuthContext = Depends(get_auth_context),
-    ctx: OrganizationContext = Depends(require_org_admin),
+    session: AsyncSession = SESSION_DEP,
+    auth: AuthContext = AUTH_DEP,
+    ctx: OrganizationContext = ORG_ADMIN_DEP,
 ) -> AgentRead:
+    """Update agent metadata and optionally reprovision."""
     agent = await Agent.objects.by_id(agent_id).first(session)
     if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
@@ -564,12 +621,16 @@ async def update_agent(
         new_board = await _require_board(session, updates["board_id"])
         if new_board.organization_id != ctx.organization.id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-        if not await has_board_access(session, member=ctx.member, board=new_board, write=True):
+        if not await has_board_access(
+            session, member=ctx.member, board=new_board, write=True,
+        ):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
     if not updates and not force and make_main is None:
         main_session_keys = await _get_gateway_main_session_keys(session)
         return _to_agent_read(_with_computed_status(agent), main_session_keys)
-    main_gateway = await _find_gateway_for_main_session(session, agent.openclaw_session_id)
+    main_gateway = await _find_gateway_for_main_session(
+        session, agent.openclaw_session_id,
+    )
     gateway_for_main: Gateway | None = None
     if make_main is True:
         board_source = updates.get("board_id") or agent.board_id
@@ -723,9 +784,10 @@ async def update_agent(
 async def heartbeat_agent(
     agent_id: str,
     payload: AgentHeartbeat,
-    session: AsyncSession = Depends(get_session),
-    actor: ActorContext = Depends(require_admin_or_agent),
+    session: AsyncSession = SESSION_DEP,
+    actor: ActorContext = ACTOR_DEP,
 ) -> AgentRead:
+    """Record a heartbeat for a specific agent."""
     agent = await Agent.objects.by_id(agent_id).first(session)
     if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
@@ -751,12 +813,14 @@ async def heartbeat_agent(
 
 
 @router.post("/heartbeat", response_model=AgentRead)
-async def heartbeat_or_create_agent(
+async def heartbeat_or_create_agent(  # noqa: C901, PLR0912, PLR0915
     payload: AgentHeartbeatCreate,
-    session: AsyncSession = Depends(get_session),
-    actor: ActorContext = Depends(require_admin_or_agent),
+    session: AsyncSession = SESSION_DEP,
+    actor: ActorContext = ACTOR_DEP,
 ) -> AgentRead:
-    # Agent tokens must heartbeat their authenticated agent record. Names are not unique.
+    """Heartbeat an existing agent or create/provision one if needed."""
+    # Agent tokens must heartbeat their authenticated agent record.
+    # Names are not unique.
     if actor.actor_type == "agent" and actor.agent:
         return await heartbeat_agent(
             agent_id=str(actor.agent.id),
@@ -793,7 +857,9 @@ async def heartbeat_or_create_agent(
         agent.agent_token_hash = hash_agent_token(raw_token)
         agent.provision_requested_at = utcnow()
         agent.provision_action = "provision"
-        session_key, session_error = await _ensure_gateway_session(agent.name, client_config)
+        session_key, session_error = await _ensure_gateway_session(
+            agent.name, client_config,
+        )
         agent.openclaw_session_id = session_key
         session.add(agent)
         await session.commit()
@@ -814,7 +880,9 @@ async def heartbeat_or_create_agent(
             )
         await session.commit()
         try:
-            await provision_agent(agent, board, gateway, raw_token, actor.user, action="provision")
+            await provision_agent(
+                agent, board, gateway, raw_token, actor.user, action="provision",
+            )
             await _send_wakeup_message(agent, client_config, verb="provisioned")
             agent.provision_confirm_token_hash = None
             agent.provision_requested_at = None
@@ -864,7 +932,7 @@ async def heartbeat_or_create_agent(
                 )
                 gateway, client_config = await _require_gateway(session, board)
                 await provision_agent(
-                    agent, board, gateway, raw_token, actor.user, action="provision"
+                    agent, board, gateway, raw_token, actor.user, action="provision",
                 )
                 await _send_wakeup_message(agent, client_config, verb="provisioned")
                 agent.provision_confirm_token_hash = None
@@ -903,7 +971,9 @@ async def heartbeat_or_create_agent(
             write=actor.actor_type == "user",
         )
         gateway, client_config = await _require_gateway(session, board)
-        session_key, session_error = await _ensure_gateway_session(agent.name, client_config)
+        session_key, session_error = await _ensure_gateway_session(
+            agent.name, client_config,
+        )
         agent.openclaw_session_id = session_key
         if session_error:
             record_activity(
@@ -937,15 +1007,18 @@ async def heartbeat_or_create_agent(
 @router.delete("/{agent_id}", response_model=OkResponse)
 async def delete_agent(
     agent_id: str,
-    session: AsyncSession = Depends(get_session),
-    ctx: OrganizationContext = Depends(require_org_admin),
+    session: AsyncSession = SESSION_DEP,
+    ctx: OrganizationContext = ORG_ADMIN_DEP,
 ) -> OkResponse:
+    """Delete an agent and clean related task state."""
     agent = await Agent.objects.by_id(agent_id).first(session)
     if agent is None:
         return OkResponse()
     await _require_agent_access(session, agent=agent, ctx=ctx, write=True)
 
-    board = await _require_board(session, str(agent.board_id) if agent.board_id else None)
+    board = await _require_board(
+        session, str(agent.board_id) if agent.board_id else None,
+    )
     gateway, client_config = await _require_gateway(session, board)
     try:
         workspace_path = await cleanup_agent(agent, gateway)
@@ -970,7 +1043,7 @@ async def delete_agent(
         message=f"Deleted agent {agent.name}.",
         agent_id=None,
     )
-    now = datetime.now()
+    now = utcnow()
     await crud.update_where(
         session,
         Task,

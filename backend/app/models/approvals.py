@@ -1,6 +1,8 @@
+"""Approval model storing pending and resolved approval actions."""
+
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime  # noqa: TCH003
 from uuid import UUID, uuid4
 
 from sqlalchemy import JSON, Column
@@ -11,6 +13,8 @@ from app.models.base import QueryModel
 
 
 class Approval(QueryModel, table=True):
+    """Approval request and decision metadata for gated operations."""
+
     __tablename__ = "approvals"
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)

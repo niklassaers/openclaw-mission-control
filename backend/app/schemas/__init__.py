@@ -1,3 +1,5 @@
+"""Public schema exports shared across API route modules."""
+
 from app.schemas.activity_events import ActivityEventRead
 from app.schemas.agents import AgentCreate, AgentRead, AgentUpdate
 from app.schemas.approvals import ApprovalCreate, ApprovalRead, ApprovalUpdate

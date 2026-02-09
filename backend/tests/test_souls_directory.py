@@ -1,9 +1,13 @@
+# ruff: noqa: INP001, S101
+"""Unit tests for souls-directory parsing and search helpers."""
+
 from __future__ import annotations
 
 from app.services.souls_directory import SoulRef, _parse_sitemap_soul_refs, search_souls
 
 
 def test_parse_sitemap_extracts_soul_refs() -> None:
+    """Sitemap parser should emit only valid soul handle/slug refs."""
     xml = """<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url><loc>https://souls.directory</loc></url>
@@ -19,6 +23,7 @@ def test_parse_sitemap_extracts_soul_refs() -> None:
 
 
 def test_search_souls_matches_handle_or_slug() -> None:
+    """Search should match both handle and slug text, case-insensitively."""
     refs = [
         SoulRef(handle="thedaviddias", slug="code-reviewer"),
         SoulRef(handle="thedaviddias", slug="technical-writer"),

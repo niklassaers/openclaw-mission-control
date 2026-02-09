@@ -1,6 +1,8 @@
+"""Board-group scoped memory entries for shared context."""
+
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime  # noqa: TCH003
 from uuid import UUID, uuid4
 
 from sqlalchemy import JSON, Column
@@ -11,6 +13,8 @@ from app.models.base import QueryModel
 
 
 class BoardGroupMemory(QueryModel, table=True):
+    """Persisted memory items associated with a board group."""
+
     __tablename__ = "board_group_memory"
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)

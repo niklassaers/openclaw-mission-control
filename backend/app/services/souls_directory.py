@@ -1,3 +1,5 @@
+"""Service helpers for querying and caching souls.directory content."""
+
 from __future__ import annotations
 
 import time
@@ -11,33 +13,41 @@ SOULS_DIRECTORY_BASE_URL: Final[str] = "https://souls.directory"
 SOULS_DIRECTORY_SITEMAP_URL: Final[str] = f"{SOULS_DIRECTORY_BASE_URL}/sitemap.xml"
 
 _SITEMAP_TTL_SECONDS: Final[int] = 60 * 60
+_SOUL_URL_MIN_PARTS: Final[int] = 6
 
 
 @dataclass(frozen=True, slots=True)
 class SoulRef:
+    """Handle/slug reference pair for a soul entry."""
+
     handle: str
     slug: str
 
     @property
     def page_url(self) -> str:
+        """Return the canonical page URL for this soul."""
         return f"{SOULS_DIRECTORY_BASE_URL}/souls/{self.handle}/{self.slug}"
 
     @property
     def raw_md_url(self) -> str:
+        """Return the raw markdown URL for this soul."""
         return f"{SOULS_DIRECTORY_BASE_URL}/api/souls/{self.handle}/{self.slug}.md"
 
 
 def _parse_sitemap_soul_refs(sitemap_xml: str) -> list[SoulRef]:
+    """Parse sitemap XML and extract valid souls.directory handle/slug refs."""
     try:
-        root = ET.fromstring(sitemap_xml)
+        # Souls sitemap is fetched from a known trusted host in this service flow.
+        root = ET.fromstring(sitemap_xml)  # noqa: S314
     except ET.ParseError:
         return []
 
     # Handle both namespaced and non-namespaced sitemap XML.
-    urls: list[str] = []
-    for loc in root.iter():
-        if loc.tag.endswith("loc") and loc.text:
-            urls.append(loc.text.strip())
+    urls = [
+        loc.text.strip()
+        for loc in root.iter()
+        if loc.tag.endswith("loc") and loc.text
+    ]
 
     refs: list[SoulRef] = []
     for url in urls:
@@ -45,7 +55,7 @@ def _parse_sitemap_soul_refs(sitemap_xml: str) -> list[SoulRef]:
             continue
         # Expected: https://souls.directory/souls/{handle}/{slug}
         parts = url.split("/")
-        if len(parts) < 6:
+        if len(parts) < _SOUL_URL_MIN_PARTS:
             continue
         handle = parts[4].strip()
         slug = parts[5].strip()
@@ -61,7 +71,11 @@ _sitemap_cache: dict[str, object] = {
 }
 
 
-async def list_souls_directory_refs(*, client: httpx.AsyncClient | None = None) -> list[SoulRef]:
+async def list_souls_directory_refs(
+    *,
+    client: httpx.AsyncClient | None = None,
+) -> list[SoulRef]:
+    """Return cached sitemap-derived soul refs, refreshing when TTL expires."""
     now = time.time()
     loaded_raw = _sitemap_cache.get("loaded_at")
     loaded_at = loaded_raw if isinstance(loaded_raw, (int, float)) else 0.0
@@ -93,11 +107,15 @@ async def fetch_soul_markdown(
     slug: str,
     client: httpx.AsyncClient | None = None,
 ) -> str:
+    """Fetch raw markdown content for a specific handle/slug pair."""
     normalized_handle = handle.strip().strip("/")
     normalized_slug = slug.strip().strip("/")
     if normalized_slug.endswith(".md"):
         normalized_slug = normalized_slug[: -len(".md")]
-    url = f"{SOULS_DIRECTORY_BASE_URL}/api/souls/{normalized_handle}/{normalized_slug}.md"
+    url = (
+        f"{SOULS_DIRECTORY_BASE_URL}/api/souls/"
+        f"{normalized_handle}/{normalized_slug}.md"
+    )
 
     owns_client = client is None
     if client is None:
@@ -115,6 +133,7 @@ async def fetch_soul_markdown(
 
 
 def search_souls(refs: list[SoulRef], *, query: str, limit: int = 20) -> list[SoulRef]:
+    """Search refs by case-insensitive handle/slug substring with a hard limit."""
     q = query.strip().lower()
     if not q:
         return refs[: max(0, min(limit, len(refs)))]

@@ -1,3 +1,5 @@
+# ruff: noqa
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -14,7 +16,10 @@ from app.models.organization_invites import OrganizationInvite
 from app.models.organization_members import OrganizationMember
 from app.models.organizations import Organization
 from app.models.users import User
-from app.schemas.organizations import OrganizationBoardAccessSpec, OrganizationMemberAccessUpdate
+from app.schemas.organizations import (
+    OrganizationBoardAccessSpec,
+    OrganizationMemberAccessUpdate,
+)
 from app.services import organizations
 
 
@@ -82,7 +87,10 @@ class _FakeSession:
 
 
 def test_normalize_invited_email_strips_and_lowercases() -> None:
-    assert organizations.normalize_invited_email("  Foo@Example.com  ") == "foo@example.com"
+    assert (
+        organizations.normalize_invited_email("  Foo@Example.com  ")
+        == "foo@example.com"
+    )
 
 
 @pytest.mark.parametrize(
@@ -104,13 +112,13 @@ def test_role_rank_unknown_role_falls_back_to_member_rank() -> None:
 
 def test_is_org_admin_owner_admin_member() -> None:
     assert organizations.is_org_admin(
-        OrganizationMember(organization_id=uuid4(), user_id=uuid4(), role="owner")
+        OrganizationMember(organization_id=uuid4(), user_id=uuid4(), role="owner"),
     )
     assert organizations.is_org_admin(
-        OrganizationMember(organization_id=uuid4(), user_id=uuid4(), role="admin")
+        OrganizationMember(organization_id=uuid4(), user_id=uuid4(), role="admin"),
     )
     assert not organizations.is_org_admin(
-        OrganizationMember(organization_id=uuid4(), user_id=uuid4(), role="member")
+        OrganizationMember(organization_id=uuid4(), user_id=uuid4(), role="member"),
     )
 
 
@@ -119,7 +127,9 @@ async def test_ensure_member_for_user_returns_existing_membership(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     user = User(clerk_user_id="u1")
-    existing = OrganizationMember(organization_id=uuid4(), user_id=user.id, role="member")
+    existing = OrganizationMember(
+        organization_id=uuid4(), user_id=user.id, role="member",
+    )
 
     async def _fake_get_active(_session: Any, _user: User) -> OrganizationMember:
         return existing
@@ -150,10 +160,12 @@ async def test_ensure_member_for_user_accepts_pending_invite(
     async def _fake_find(_session: Any, _email: str) -> OrganizationInvite:
         return invite
 
-    accepted = OrganizationMember(organization_id=org_id, user_id=user.id, role="member")
+    accepted = OrganizationMember(
+        organization_id=org_id, user_id=user.id, role="member",
+    )
 
     async def _fake_accept(
-        _session: Any, _invite: OrganizationInvite, _user: User
+        _session: Any, _invite: OrganizationInvite, _user: User,
     ) -> OrganizationMember:
         assert _invite is invite
         assert _user is user
@@ -203,7 +215,9 @@ async def test_has_board_access_denies_cross_org() -> None:
     member = OrganizationMember(organization_id=uuid4(), user_id=uuid4(), role="member")
     board = Board(id=uuid4(), organization_id=uuid4(), name="b", slug="b")
     assert (
-        await organizations.has_board_access(session, member=member, board=board, write=False)
+        await organizations.has_board_access(
+            session, member=member, board=board, write=False,
+        )
         is False
     )
 
@@ -211,7 +225,9 @@ async def test_has_board_access_denies_cross_org() -> None:
 @pytest.mark.asyncio
 async def test_has_board_access_uses_org_board_access_row_read_and_write() -> None:
     org_id = uuid4()
-    member = OrganizationMember(id=uuid4(), organization_id=org_id, user_id=uuid4(), role="member")
+    member = OrganizationMember(
+        id=uuid4(), organization_id=org_id, user_id=uuid4(), role="member",
+    )
     board = Board(id=uuid4(), organization_id=org_id, name="b", slug="b")
 
     access = OrganizationBoardAccess(
@@ -222,7 +238,9 @@ async def test_has_board_access_uses_org_board_access_row_read_and_write() -> No
     )
     session = _FakeSession(exec_results=[_FakeExecResult(first_value=access)])
     assert (
-        await organizations.has_board_access(session, member=member, board=board, write=False)
+        await organizations.has_board_access(
+            session, member=member, board=board, write=False,
+        )
         is True
     )
 
@@ -234,7 +252,9 @@ async def test_has_board_access_uses_org_board_access_row_read_and_write() -> No
     )
     session2 = _FakeSession(exec_results=[_FakeExecResult(first_value=access2)])
     assert (
-        await organizations.has_board_access(session2, member=member, board=board, write=False)
+        await organizations.has_board_access(
+            session2, member=member, board=board, write=False,
+        )
         is True
     )
 
@@ -246,13 +266,17 @@ async def test_has_board_access_uses_org_board_access_row_read_and_write() -> No
     )
     session3 = _FakeSession(exec_results=[_FakeExecResult(first_value=access3)])
     assert (
-        await organizations.has_board_access(session3, member=member, board=board, write=True)
+        await organizations.has_board_access(
+            session3, member=member, board=board, write=True,
+        )
         is False
     )
 
 
 @pytest.mark.asyncio
-async def test_require_board_access_raises_when_no_member(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_require_board_access_raises_when_no_member(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     user = User(clerk_user_id="u1")
     board = Board(id=uuid4(), organization_id=uuid4(), name="b", slug="b")
 
@@ -263,7 +287,9 @@ async def test_require_board_access_raises_when_no_member(monkeypatch: pytest.Mo
 
     session = _FakeSession(exec_results=[])
     with pytest.raises(HTTPException) as exc:
-        await organizations.require_board_access(session, user=user, board=board, write=False)
+        await organizations.require_board_access(
+            session, user=user, board=board, write=False,
+        )
     assert exc.value.status_code == 403
 
 
@@ -271,18 +297,26 @@ async def test_require_board_access_raises_when_no_member(monkeypatch: pytest.Mo
 async def test_apply_member_access_update_deletes_existing_and_adds_rows_when_not_all_boards() -> (
     None
 ):
-    member = OrganizationMember(id=uuid4(), organization_id=uuid4(), user_id=uuid4(), role="member")
+    member = OrganizationMember(
+        id=uuid4(), organization_id=uuid4(), user_id=uuid4(), role="member",
+    )
     update = OrganizationMemberAccessUpdate(
         all_boards_read=False,
         all_boards_write=False,
         board_access=[
-            OrganizationBoardAccessSpec(board_id=uuid4(), can_read=True, can_write=False),
-            OrganizationBoardAccessSpec(board_id=uuid4(), can_read=True, can_write=True),
+            OrganizationBoardAccessSpec(
+                board_id=uuid4(), can_read=True, can_write=False,
+            ),
+            OrganizationBoardAccessSpec(
+                board_id=uuid4(), can_read=True, can_write=True,
+            ),
         ],
     )
     session = _FakeSession(exec_results=[])
 
-    await organizations.apply_member_access_update(session, member=member, update=update)
+    await organizations.apply_member_access_update(
+        session, member=member, update=update,
+    )
 
     # delete statement executed once
     assert len(session.executed) == 1
@@ -330,7 +364,7 @@ async def test_apply_invite_to_member_upgrades_role_and_merges_access_rows(
         exec_results=[
             [invite_access],
             _FakeExecResult(first_value=None),
-        ]
+        ],
     )
 
     await organizations.apply_invite_to_member(session, member=member, invite=invite)

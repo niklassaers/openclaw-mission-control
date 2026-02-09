@@ -1,6 +1,8 @@
+"""Activity event model persisted for audit and feed use-cases."""
+
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime  # noqa: TCH003
 from uuid import UUID, uuid4
 
 from sqlmodel import Field
@@ -10,6 +12,8 @@ from app.models.base import QueryModel
 
 
 class ActivityEvent(QueryModel, table=True):
+    """Discrete activity event tied to tasks and agents."""
+
     __tablename__ = "activity_events"
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)

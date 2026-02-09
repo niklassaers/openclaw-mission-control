@@ -1,33 +1,44 @@
+"""Agent authentication helpers for token-backed API access."""
+
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from fastapi import Depends, Header, HTTPException, Request, status
 from sqlmodel import col, select
-from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.agent_tokens import verify_agent_token
 from app.core.time import utcnow
 from app.db.session import get_session
 from app.models.agents import Agent
 
+if TYPE_CHECKING:
+    from sqlmodel.ext.asyncio.session import AsyncSession
+
 logger = logging.getLogger(__name__)
 
 _LAST_SEEN_TOUCH_INTERVAL = timedelta(seconds=30)
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+SESSION_DEP = Depends(get_session)
 
 
 @dataclass
 class AgentAuthContext:
+    """Authenticated actor payload for agent-originated requests."""
+
     actor_type: Literal["agent"]
     agent: Agent
 
 
 async def _find_agent_for_token(session: AsyncSession, token: str) -> Agent | None:
-    agents = list(await session.exec(select(Agent).where(col(Agent.agent_token_hash).is_not(None))))
+    agents = list(
+        await session.exec(
+            select(Agent).where(col(Agent.agent_token_hash).is_not(None)),
+        ),
+    )
     for agent in agents:
         if agent.agent_token_hash and verify_agent_token(token, agent.agent_token_hash):
             return agent
@@ -65,9 +76,11 @@ async def _touch_agent_presence(
     calls (task comments, memory updates, etc). Touch presence so the UI reflects
     real activity even if the heartbeat loop isn't running.
     """
-
     now = utcnow()
-    if agent.last_seen_at is not None and now - agent.last_seen_at < _LAST_SEEN_TOUCH_INTERVAL:
+    if (
+        agent.last_seen_at is not None
+        and now - agent.last_seen_at < _LAST_SEEN_TOUCH_INTERVAL
+    ):
         return
 
     agent.last_seen_at = now
@@ -86,9 +99,14 @@ async def get_agent_auth_context(
     request: Request,
     agent_token: str | None = Header(default=None, alias="X-Agent-Token"),
     authorization: str | None = Header(default=None, alias="Authorization"),
-    session: AsyncSession = Depends(get_session),
+    session: AsyncSession = SESSION_DEP,
 ) -> AgentAuthContext:
-    resolved = _resolve_agent_token(agent_token, authorization, accept_authorization=True)
+    """Require and validate agent auth token from request headers."""
+    resolved = _resolve_agent_token(
+        agent_token,
+        authorization,
+        accept_authorization=True,
+    )
     if not resolved:
         logger.warning(
             "agent auth missing token path=%s x_agent=%s authorization=%s",
@@ -113,8 +131,9 @@ async def get_agent_auth_context_optional(
     request: Request,
     agent_token: str | None = Header(default=None, alias="X-Agent-Token"),
     authorization: str | None = Header(default=None, alias="Authorization"),
-    session: AsyncSession = Depends(get_session),
+    session: AsyncSession = SESSION_DEP,
 ) -> AgentAuthContext | None:
+    """Optionally resolve agent auth context from `X-Agent-Token` only."""
     resolved = _resolve_agent_token(
         agent_token,
         authorization,

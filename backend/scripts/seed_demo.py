@@ -1,3 +1,5 @@
+"""Seed a minimal local demo dataset for manual development flows."""
+
 from __future__ import annotations
 
 import asyncio
@@ -16,14 +18,16 @@ from app.models.users import User  # noqa: E402
 
 
 async def run() -> None:
+    """Populate the local database with a demo gateway, board, user, and agent."""
     await init_db()
     async with async_session_maker() as session:
+        demo_workspace_root = BACKEND_ROOT / ".tmp" / "openclaw-demo"
         gateway = Gateway(
             name="Demo Gateway",
             url="http://localhost:8080",
             token=None,
             main_session_key="demo:main",
-            workspace_root="/tmp/openclaw-demo",
+            workspace_root=str(demo_workspace_root),
         )
         session.add(gateway)
         await session.commit()

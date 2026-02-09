@@ -1,13 +1,14 @@
+"""Agent-scoped API routes for board operations and gateway coordination."""
+
 from __future__ import annotations
 
 import re
 from collections.abc import Sequence
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlmodel import SQLModel, col, select
-from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.api import agents as agents_api
 from app.api import approvals as approvals_api
@@ -27,11 +28,7 @@ from app.integrations.openclaw_gateway import (
     openclaw_call,
     send_message,
 )
-from app.models.activity_events import ActivityEvent
 from app.models.agents import Agent
-from app.models.approvals import Approval
-from app.models.board_memory import BoardMemory
-from app.models.board_onboarding import BoardOnboardingSession
 from app.models.boards import Board
 from app.models.gateways import Gateway
 from app.models.task_dependencies import TaskDependency
@@ -58,7 +55,13 @@ from app.schemas.gateway_coordination import (
     GatewayMainAskUserResponse,
 )
 from app.schemas.pagination import DefaultLimitOffsetPage
-from app.schemas.tasks import TaskCommentCreate, TaskCommentRead, TaskCreate, TaskRead, TaskUpdate
+from app.schemas.tasks import (
+    TaskCommentCreate,
+    TaskCommentRead,
+    TaskCreate,
+    TaskRead,
+    TaskUpdate,
+)
 from app.services.activity_log import record_activity
 from app.services.board_leads import ensure_board_lead_agent
 from app.services.task_dependencies import (
@@ -67,11 +70,27 @@ from app.services.task_dependencies import (
     validate_dependency_update,
 )
 
+if TYPE_CHECKING:
+    from sqlmodel.ext.asyncio.session import AsyncSession
+
+    from app.models.activity_events import ActivityEvent
+    from app.models.approvals import Approval
+    from app.models.board_memory import BoardMemory
+    from app.models.board_onboarding import BoardOnboardingSession
+
 router = APIRouter(prefix="/agent", tags=["agent"])
 
 _AGENT_SESSION_PREFIX = "agent:"
 _SESSION_KEY_PARTS_MIN = 2
 _LEAD_SESSION_KEY_MISSING = "Lead agent has no session key"
+SESSION_DEP = Depends(get_session)
+AGENT_CTX_DEP = Depends(get_agent_auth_context)
+BOARD_DEP = Depends(get_board_or_404)
+TASK_DEP = Depends(get_task_or_404)
+BOARD_ID_QUERY = Query(default=None)
+TASK_STATUS_QUERY = Query(default=None, alias="status")
+IS_CHAT_QUERY = Query(default=None)
+APPROVAL_STATUS_QUERY = Query(default=None, alias="status")
 
 
 def _gateway_agent_id(agent: Agent) -> str:
@@ -87,6 +106,8 @@ def _gateway_agent_id(agent: Agent) -> str:
 
 
 class SoulUpdateRequest(SQLModel):
+    """Payload for updating an agent SOUL document."""
+
     content: str
     source_url: str | None = None
     reason: str | None = None
@@ -124,9 +145,12 @@ async def _require_gateway_main(
     session_key = (agent.openclaw_session_id or "").strip()
     if not session_key:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Agent missing session key"
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Agent missing session key",
         )
-    gateway = await Gateway.objects.filter_by(main_session_key=session_key).first(session)
+    gateway = await Gateway.objects.filter_by(main_session_key=session_key).first(
+        session,
+    )
     if gateway is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -148,7 +172,9 @@ async def _require_gateway_board(
 ) -> Board:
     board = await Board.objects.by_id(board_id).first(session)
     if board is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Board not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Board not found",
+        )
     if board.gateway_id != gateway.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
     return board
@@ -156,9 +182,10 @@ async def _require_gateway_board(
 
 @router.get("/boards", response_model=DefaultLimitOffsetPage[BoardRead])
 async def list_boards(
-    session: AsyncSession = Depends(get_session),
-    agent_ctx: AgentAuthContext = Depends(get_agent_auth_context),
+    session: AsyncSession = SESSION_DEP,
+    agent_ctx: AgentAuthContext = AGENT_CTX_DEP,
 ) -> DefaultLimitOffsetPage[BoardRead]:
+    """List boards visible to the authenticated agent."""
     statement = select(Board)
     if agent_ctx.agent.board_id:
         statement = statement.where(col(Board.id) == agent_ctx.agent.board_id)
@@ -168,19 +195,21 @@ async def list_boards(
 
 @router.get("/boards/{board_id}", response_model=BoardRead)
 def get_board(
-    board: Board = Depends(get_board_or_404),
-    agent_ctx: AgentAuthContext = Depends(get_agent_auth_context),
+    board: Board = BOARD_DEP,
+    agent_ctx: AgentAuthContext = AGENT_CTX_DEP,
 ) -> Board:
+    """Return a board if the authenticated agent can access it."""
     _guard_board_access(agent_ctx, board)
     return board
 
 
 @router.get("/agents", response_model=DefaultLimitOffsetPage[AgentRead])
 async def list_agents(
-    board_id: UUID | None = Query(default=None),
-    session: AsyncSession = Depends(get_session),
-    agent_ctx: AgentAuthContext = Depends(get_agent_auth_context),
+    board_id: UUID | None = BOARD_ID_QUERY,
+    session: AsyncSession = SESSION_DEP,
+    agent_ctx: AgentAuthContext = AGENT_CTX_DEP,
 ) -> DefaultLimitOffsetPage[AgentRead]:
+    """List agents, optionally filtered to a board."""
     statement = select(Agent)
     if agent_ctx.agent.board_id:
         if board_id and board_id != agent_ctx.agent.board_id:
@@ -188,13 +217,19 @@ async def list_agents(
         statement = statement.where(Agent.board_id == agent_ctx.agent.board_id)
     elif board_id:
         statement = statement.where(Agent.board_id == board_id)
-    main_session_keys = await agents_api._get_gateway_main_session_keys(session)
+    get_gateway_main_session_keys = (
+        agents_api._get_gateway_main_session_keys  # noqa: SLF001
+    )
+    to_agent_read = agents_api._to_agent_read  # noqa: SLF001
+    with_computed_status = agents_api._with_computed_status  # noqa: SLF001
+
+    main_session_keys = await get_gateway_main_session_keys(session)
     statement = statement.order_by(col(Agent.created_at).desc())
 
     def _transform(items: Sequence[Any]) -> Sequence[Any]:
         agents = cast(Sequence[Agent], items)
         return [
-            agents_api._to_agent_read(agents_api._with_computed_status(agent), main_session_keys)
+            to_agent_read(with_computed_status(agent), main_session_keys)
             for agent in agents
         ]
 
@@ -202,14 +237,15 @@ async def list_agents(
 
 
 @router.get("/boards/{board_id}/tasks", response_model=DefaultLimitOffsetPage[TaskRead])
-async def list_tasks(
-    status_filter: str | None = Query(default=None, alias="status"),
+async def list_tasks(  # noqa: PLR0913
+    status_filter: str | None = TASK_STATUS_QUERY,
     assigned_agent_id: UUID | None = None,
     unassigned: bool | None = None,
-    board: Board = Depends(get_board_or_404),
-    session: AsyncSession = Depends(get_session),
-    agent_ctx: AgentAuthContext = Depends(get_agent_auth_context),
+    board: Board = BOARD_DEP,
+    session: AsyncSession = SESSION_DEP,
+    agent_ctx: AgentAuthContext = AGENT_CTX_DEP,
 ) -> DefaultLimitOffsetPage[TaskRead]:
+    """List tasks on a board with optional status and assignment filters."""
     _guard_board_access(agent_ctx, board)
     return await tasks_api.list_tasks(
         status_filter=status_filter,
@@ -224,10 +260,11 @@ async def list_tasks(
 @router.post("/boards/{board_id}/tasks", response_model=TaskRead)
 async def create_task(
     payload: TaskCreate,
-    board: Board = Depends(get_board_or_404),
-    session: AsyncSession = Depends(get_session),
-    agent_ctx: AgentAuthContext = Depends(get_agent_auth_context),
+    board: Board = BOARD_DEP,
+    session: AsyncSession = SESSION_DEP,
+    agent_ctx: AgentAuthContext = AGENT_CTX_DEP,
 ) -> TaskRead:
+    """Create a task on the board as the lead agent."""
     _guard_board_access(agent_ctx, board)
     if not agent_ctx.agent.is_board_lead:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
@@ -250,7 +287,9 @@ async def create_task(
         board_id=board.id,
         dependency_ids=normalized_deps,
     )
-    blocked_by = blocked_by_dependency_ids(dependency_ids=normalized_deps, status_by_id=dep_status)
+    blocked_by = blocked_by_dependency_ids(
+        dependency_ids=normalized_deps, status_by_id=dep_status,
+    )
 
     if blocked_by and (task.assigned_agent_id is not None or task.status != "inbox"):
         raise HTTPException(
@@ -280,7 +319,7 @@ async def create_task(
                 board_id=board.id,
                 task_id=task.id,
                 depends_on_task_id=dep_id,
-            )
+            ),
         )
     await session.commit()
     await session.refresh(task)
@@ -293,9 +332,14 @@ async def create_task(
     )
     await session.commit()
     if task.assigned_agent_id:
-        assigned_agent = await Agent.objects.by_id(task.assigned_agent_id).first(session)
+        assigned_agent = await Agent.objects.by_id(task.assigned_agent_id).first(
+            session,
+        )
         if assigned_agent:
-            await tasks_api._notify_agent_on_task_assign(
+            notify_agent_on_task_assign = (
+                tasks_api._notify_agent_on_task_assign  # noqa: SLF001
+            )
+            await notify_agent_on_task_assign(
                 session=session,
                 board=board,
                 task=task,
@@ -306,18 +350,23 @@ async def create_task(
             "depends_on_task_ids": normalized_deps,
             "blocked_by_task_ids": blocked_by,
             "is_blocked": bool(blocked_by),
-        }
+        },
     )
 
 
 @router.patch("/boards/{board_id}/tasks/{task_id}", response_model=TaskRead)
 async def update_task(
     payload: TaskUpdate,
-    task: Task = Depends(get_task_or_404),
-    session: AsyncSession = Depends(get_session),
-    agent_ctx: AgentAuthContext = Depends(get_agent_auth_context),
+    task: Task = TASK_DEP,
+    session: AsyncSession = SESSION_DEP,
+    agent_ctx: AgentAuthContext = AGENT_CTX_DEP,
 ) -> TaskRead:
-    if agent_ctx.agent.board_id and task.board_id and agent_ctx.agent.board_id != task.board_id:
+    """Update a task after board-level access checks."""
+    if (
+        agent_ctx.agent.board_id
+        and task.board_id
+        and agent_ctx.agent.board_id != task.board_id
+    ):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
     return await tasks_api.update_task(
         payload=payload,
@@ -332,11 +381,16 @@ async def update_task(
     response_model=DefaultLimitOffsetPage[TaskCommentRead],
 )
 async def list_task_comments(
-    task: Task = Depends(get_task_or_404),
-    session: AsyncSession = Depends(get_session),
-    agent_ctx: AgentAuthContext = Depends(get_agent_auth_context),
+    task: Task = TASK_DEP,
+    session: AsyncSession = SESSION_DEP,
+    agent_ctx: AgentAuthContext = AGENT_CTX_DEP,
 ) -> DefaultLimitOffsetPage[TaskCommentRead]:
-    if agent_ctx.agent.board_id and task.board_id and agent_ctx.agent.board_id != task.board_id:
+    """List comments for a task visible to the authenticated agent."""
+    if (
+        agent_ctx.agent.board_id
+        and task.board_id
+        and agent_ctx.agent.board_id != task.board_id
+    ):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
     return await tasks_api.list_task_comments(
         task=task,
@@ -344,14 +398,21 @@ async def list_task_comments(
     )
 
 
-@router.post("/boards/{board_id}/tasks/{task_id}/comments", response_model=TaskCommentRead)
+@router.post(
+    "/boards/{board_id}/tasks/{task_id}/comments", response_model=TaskCommentRead,
+)
 async def create_task_comment(
     payload: TaskCommentCreate,
-    task: Task = Depends(get_task_or_404),
-    session: AsyncSession = Depends(get_session),
-    agent_ctx: AgentAuthContext = Depends(get_agent_auth_context),
+    task: Task = TASK_DEP,
+    session: AsyncSession = SESSION_DEP,
+    agent_ctx: AgentAuthContext = AGENT_CTX_DEP,
 ) -> ActivityEvent:
-    if agent_ctx.agent.board_id and task.board_id and agent_ctx.agent.board_id != task.board_id:
+    """Create a task comment on behalf of the authenticated agent."""
+    if (
+        agent_ctx.agent.board_id
+        and task.board_id
+        and agent_ctx.agent.board_id != task.board_id
+    ):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
     return await tasks_api.create_task_comment(
         payload=payload,
@@ -361,13 +422,16 @@ async def create_task_comment(
     )
 
 
-@router.get("/boards/{board_id}/memory", response_model=DefaultLimitOffsetPage[BoardMemoryRead])
+@router.get(
+    "/boards/{board_id}/memory", response_model=DefaultLimitOffsetPage[BoardMemoryRead],
+)
 async def list_board_memory(
-    is_chat: bool | None = Query(default=None),
-    board: Board = Depends(get_board_or_404),
-    session: AsyncSession = Depends(get_session),
-    agent_ctx: AgentAuthContext = Depends(get_agent_auth_context),
+    is_chat: bool | None = IS_CHAT_QUERY,
+    board: Board = BOARD_DEP,
+    session: AsyncSession = SESSION_DEP,
+    agent_ctx: AgentAuthContext = AGENT_CTX_DEP,
 ) -> DefaultLimitOffsetPage[BoardMemoryRead]:
+    """List board memory entries with optional chat filtering."""
     _guard_board_access(agent_ctx, board)
     return await board_memory_api.list_board_memory(
         is_chat=is_chat,
@@ -380,10 +444,11 @@ async def list_board_memory(
 @router.post("/boards/{board_id}/memory", response_model=BoardMemoryRead)
 async def create_board_memory(
     payload: BoardMemoryCreate,
-    board: Board = Depends(get_board_or_404),
-    session: AsyncSession = Depends(get_session),
-    agent_ctx: AgentAuthContext = Depends(get_agent_auth_context),
+    board: Board = BOARD_DEP,
+    session: AsyncSession = SESSION_DEP,
+    agent_ctx: AgentAuthContext = AGENT_CTX_DEP,
 ) -> BoardMemory:
+    """Create a board memory entry."""
     _guard_board_access(agent_ctx, board)
     return await board_memory_api.create_board_memory(
         payload=payload,
@@ -398,11 +463,12 @@ async def create_board_memory(
     response_model=DefaultLimitOffsetPage[ApprovalRead],
 )
 async def list_approvals(
-    status_filter: ApprovalStatus | None = Query(default=None, alias="status"),
-    board: Board = Depends(get_board_or_404),
-    session: AsyncSession = Depends(get_session),
-    agent_ctx: AgentAuthContext = Depends(get_agent_auth_context),
+    status_filter: ApprovalStatus | None = APPROVAL_STATUS_QUERY,
+    board: Board = BOARD_DEP,
+    session: AsyncSession = SESSION_DEP,
+    agent_ctx: AgentAuthContext = AGENT_CTX_DEP,
 ) -> DefaultLimitOffsetPage[ApprovalRead]:
+    """List approvals for a board."""
     _guard_board_access(agent_ctx, board)
     return await approvals_api.list_approvals(
         status_filter=status_filter,
@@ -415,10 +481,11 @@ async def list_approvals(
 @router.post("/boards/{board_id}/approvals", response_model=ApprovalRead)
 async def create_approval(
     payload: ApprovalCreate,
-    board: Board = Depends(get_board_or_404),
-    session: AsyncSession = Depends(get_session),
-    agent_ctx: AgentAuthContext = Depends(get_agent_auth_context),
+    board: Board = BOARD_DEP,
+    session: AsyncSession = SESSION_DEP,
+    agent_ctx: AgentAuthContext = AGENT_CTX_DEP,
 ) -> Approval:
+    """Create a board approval request."""
     _guard_board_access(agent_ctx, board)
     return await approvals_api.create_approval(
         payload=payload,
@@ -431,10 +498,11 @@ async def create_approval(
 @router.post("/boards/{board_id}/onboarding", response_model=BoardOnboardingRead)
 async def update_onboarding(
     payload: BoardOnboardingAgentUpdate,
-    board: Board = Depends(get_board_or_404),
-    session: AsyncSession = Depends(get_session),
-    agent_ctx: AgentAuthContext = Depends(get_agent_auth_context),
+    board: Board = BOARD_DEP,
+    session: AsyncSession = SESSION_DEP,
+    agent_ctx: AgentAuthContext = AGENT_CTX_DEP,
 ) -> BoardOnboardingSession:
+    """Apply onboarding updates for a board."""
     _guard_board_access(agent_ctx, board)
     return await onboarding_api.agent_onboarding_update(
         payload=payload,
@@ -447,14 +515,17 @@ async def update_onboarding(
 @router.post("/agents", response_model=AgentRead)
 async def create_agent(
     payload: AgentCreate,
-    session: AsyncSession = Depends(get_session),
-    agent_ctx: AgentAuthContext = Depends(get_agent_auth_context),
+    session: AsyncSession = SESSION_DEP,
+    agent_ctx: AgentAuthContext = AGENT_CTX_DEP,
 ) -> AgentRead:
+    """Create an agent on the caller's board."""
     if not agent_ctx.agent.is_board_lead:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
     if not agent_ctx.agent.board_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
-    payload = AgentCreate(**{**payload.model_dump(), "board_id": agent_ctx.agent.board_id})
+    payload = AgentCreate(
+        **{**payload.model_dump(), "board_id": agent_ctx.agent.board_id},
+    )
     return await agents_api.create_agent(
         payload=payload,
         session=session,
@@ -466,10 +537,11 @@ async def create_agent(
 async def nudge_agent(
     payload: AgentNudge,
     agent_id: str,
-    board: Board = Depends(get_board_or_404),
-    session: AsyncSession = Depends(get_session),
-    agent_ctx: AgentAuthContext = Depends(get_agent_auth_context),
+    board: Board = BOARD_DEP,
+    session: AsyncSession = SESSION_DEP,
+    agent_ctx: AgentAuthContext = AGENT_CTX_DEP,
 ) -> OkResponse:
+    """Send a direct nudge message to a board agent."""
     _guard_board_access(agent_ctx, board)
     if not agent_ctx.agent.is_board_lead:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
@@ -484,7 +556,9 @@ async def nudge_agent(
     message = payload.message
     config = await _gateway_config(session, board)
     try:
-        await ensure_session(target.openclaw_session_id, config=config, label=target.name)
+        await ensure_session(
+            target.openclaw_session_id, config=config, label=target.name,
+        )
         await send_message(
             message,
             session_key=target.openclaw_session_id,
@@ -499,7 +573,9 @@ async def nudge_agent(
             agent_id=agent_ctx.agent.id,
         )
         await session.commit()
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc),
+        ) from exc
     record_activity(
         session,
         event_type="agent.nudge.sent",
@@ -513,9 +589,10 @@ async def nudge_agent(
 @router.post("/heartbeat", response_model=AgentRead)
 async def agent_heartbeat(
     payload: AgentHeartbeatCreate,
-    session: AsyncSession = Depends(get_session),
-    agent_ctx: AgentAuthContext = Depends(get_agent_auth_context),
+    session: AsyncSession = SESSION_DEP,
+    agent_ctx: AgentAuthContext = AGENT_CTX_DEP,
 ) -> AgentRead:
+    """Record heartbeat status for the authenticated agent."""
     # Heartbeats must apply to the authenticated agent; agent names are not unique.
     return await agents_api.heartbeat_agent(
         agent_id=str(agent_ctx.agent.id),
@@ -528,10 +605,11 @@ async def agent_heartbeat(
 @router.get("/boards/{board_id}/agents/{agent_id}/soul", response_model=str)
 async def get_agent_soul(
     agent_id: str,
-    board: Board = Depends(get_board_or_404),
-    session: AsyncSession = Depends(get_session),
-    agent_ctx: AgentAuthContext = Depends(get_agent_auth_context),
+    board: Board = BOARD_DEP,
+    session: AsyncSession = SESSION_DEP,
+    agent_ctx: AgentAuthContext = AGENT_CTX_DEP,
 ) -> str:
+    """Fetch the target agent's SOUL.md content from the gateway."""
     _guard_board_access(agent_ctx, board)
     if not agent_ctx.agent.is_board_lead and str(agent_ctx.agent.id) != agent_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
@@ -547,7 +625,9 @@ async def get_agent_soul(
             config=config,
         )
     except OpenClawGatewayError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc),
+        ) from exc
     if isinstance(payload, str):
         return payload
     if isinstance(payload, dict):
@@ -559,17 +639,20 @@ async def get_agent_soul(
             nested = file_obj.get("content")
             if isinstance(nested, str):
                 return nested
-    raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Invalid gateway response")
+    raise HTTPException(
+        status_code=status.HTTP_502_BAD_GATEWAY, detail="Invalid gateway response",
+    )
 
 
 @router.put("/boards/{board_id}/agents/{agent_id}/soul", response_model=OkResponse)
 async def update_agent_soul(
     agent_id: str,
     payload: SoulUpdateRequest,
-    board: Board = Depends(get_board_or_404),
-    session: AsyncSession = Depends(get_session),
-    agent_ctx: AgentAuthContext = Depends(get_agent_auth_context),
+    board: Board = BOARD_DEP,
+    session: AsyncSession = SESSION_DEP,
+    agent_ctx: AgentAuthContext = AGENT_CTX_DEP,
 ) -> OkResponse:
+    """Update an agent's SOUL.md content in DB and gateway."""
     _guard_board_access(agent_ctx, board)
     if not agent_ctx.agent.is_board_lead:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
@@ -597,7 +680,9 @@ async def update_agent_soul(
             config=config,
         )
     except OpenClawGatewayError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc),
+        ) from exc
     reason = (payload.reason or "").strip()
     source_url = (payload.source_url or "").strip()
     note = f"SOUL.md updated for {target.name}."
@@ -621,10 +706,11 @@ async def update_agent_soul(
 )
 async def ask_user_via_gateway_main(
     payload: GatewayMainAskUserRequest,
-    board: Board = Depends(get_board_or_404),
-    session: AsyncSession = Depends(get_session),
-    agent_ctx: AgentAuthContext = Depends(get_agent_auth_context),
+    board: Board = BOARD_DEP,
+    session: AsyncSession = SESSION_DEP,
+    agent_ctx: AgentAuthContext = AGENT_CTX_DEP,
 ) -> GatewayMainAskUserResponse:
+    """Route a lead's ask-user request through the gateway main agent."""
     import json
 
     _guard_board_access(agent_ctx, board)
@@ -653,7 +739,9 @@ async def ask_user_via_gateway_main(
     correlation = payload.correlation_id.strip() if payload.correlation_id else ""
     correlation_line = f"Correlation ID: {correlation}\n" if correlation else ""
     preferred_channel = (payload.preferred_channel or "").strip()
-    channel_line = f"Preferred channel: {preferred_channel}\n" if preferred_channel else ""
+    channel_line = (
+        f"Preferred channel: {preferred_channel}\n" if preferred_channel else ""
+    )
 
     tags = payload.reply_tags or ["gateway_main", "user_reply"]
     tags_json = json.dumps(tags)
@@ -668,9 +756,12 @@ async def ask_user_via_gateway_main(
         f"{correlation_line}"
         f"{channel_line}\n"
         f"{payload.content.strip()}\n\n"
-        "Please reach the user via your configured OpenClaw channel(s) (Slack/SMS/etc).\n"
-        "If you cannot reach them there, post the question in Mission Control board chat as a fallback.\n\n"
-        "When you receive the answer, reply in Mission Control by writing a NON-chat memory item on this board:\n"
+        "Please reach the user via your configured OpenClaw channel(s) "
+        "(Slack/SMS/etc).\n"
+        "If you cannot reach them there, post the question in Mission Control "
+        "board chat as a fallback.\n\n"
+        "When you receive the answer, reply in Mission Control by writing a "
+        "NON-chat memory item on this board:\n"
         f"POST {base_url}/api/v1/agent/boards/{board.id}/memory\n"
         f'Body: {{"content":"<answer>","tags":{tags_json},"source":"{reply_source}"}}\n'
         "Do NOT reply in OpenClaw chat."
@@ -678,7 +769,9 @@ async def ask_user_via_gateway_main(
 
     try:
         await ensure_session(main_session_key, config=config, label="Main Agent")
-        await send_message(message, session_key=main_session_key, config=config, deliver=True)
+        await send_message(
+            message, session_key=main_session_key, config=config, deliver=True,
+        )
     except OpenClawGatewayError as exc:
         record_activity(
             session,
@@ -687,7 +780,9 @@ async def ask_user_via_gateway_main(
             agent_id=agent_ctx.agent.id,
         )
         await session.commit()
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc),
+        ) from exc
 
     record_activity(
         session,
@@ -696,7 +791,9 @@ async def ask_user_via_gateway_main(
         agent_id=agent_ctx.agent.id,
     )
 
-    main_agent = await Agent.objects.filter_by(openclaw_session_id=main_session_key).first(session)
+    main_agent = await Agent.objects.filter_by(
+        openclaw_session_id=main_session_key,
+    ).first(session)
 
     await session.commit()
 
@@ -714,9 +811,10 @@ async def ask_user_via_gateway_main(
 async def message_gateway_board_lead(
     board_id: UUID,
     payload: GatewayLeadMessageRequest,
-    session: AsyncSession = Depends(get_session),
-    agent_ctx: AgentAuthContext = Depends(get_agent_auth_context),
+    session: AsyncSession = SESSION_DEP,
+    agent_ctx: AgentAuthContext = AGENT_CTX_DEP,
 ) -> GatewayLeadMessageResponse:
+    """Send a gateway-main message to a single board lead agent."""
     import json
 
     gateway, config = await _require_gateway_main(session, agent_ctx.agent)
@@ -736,7 +834,11 @@ async def message_gateway_board_lead(
         )
 
     base_url = settings.base_url or "http://localhost:8000"
-    header = "GATEWAY MAIN QUESTION" if payload.kind == "question" else "GATEWAY MAIN HANDOFF"
+    header = (
+        "GATEWAY MAIN QUESTION"
+        if payload.kind == "question"
+        else "GATEWAY MAIN HANDOFF"
+    )
     correlation = payload.correlation_id.strip() if payload.correlation_id else ""
     correlation_line = f"Correlation ID: {correlation}\n" if correlation else ""
     tags = payload.reply_tags or ["gateway_main", "lead_reply"]
@@ -767,7 +869,9 @@ async def message_gateway_board_lead(
             agent_id=agent_ctx.agent.id,
         )
         await session.commit()
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc),
+        ) from exc
 
     record_activity(
         session,
@@ -791,9 +895,10 @@ async def message_gateway_board_lead(
 )
 async def broadcast_gateway_lead_message(
     payload: GatewayLeadBroadcastRequest,
-    session: AsyncSession = Depends(get_session),
-    agent_ctx: AgentAuthContext = Depends(get_agent_auth_context),
+    session: AsyncSession = SESSION_DEP,
+    agent_ctx: AgentAuthContext = AGENT_CTX_DEP,
 ) -> GatewayLeadBroadcastResponse:
+    """Broadcast a gateway-main message to multiple board leads."""
     import json
 
     gateway, config = await _require_gateway_main(session, agent_ctx.agent)
@@ -808,7 +913,11 @@ async def broadcast_gateway_lead_message(
     boards = list(await session.exec(statement))
 
     base_url = settings.base_url or "http://localhost:8000"
-    header = "GATEWAY MAIN QUESTION" if payload.kind == "question" else "GATEWAY MAIN HANDOFF"
+    header = (
+        "GATEWAY MAIN QUESTION"
+        if payload.kind == "question"
+        else "GATEWAY MAIN HANDOFF"
+    )
     correlation = payload.correlation_id.strip() if payload.correlation_id else ""
     correlation_line = f"Correlation ID: {correlation}\n" if correlation else ""
     tags = payload.reply_tags or ["gateway_main", "lead_reply"]
@@ -819,7 +928,7 @@ async def broadcast_gateway_lead_message(
     sent = 0
     failed = 0
 
-    for board in boards:
+    async def _send_to_board(board: Board) -> GatewayLeadBroadcastBoardResult:
         try:
             lead, _lead_created = await ensure_board_lead_agent(
                 session,
@@ -837,30 +946,34 @@ async def broadcast_gateway_lead_message(
                 f"From agent: {agent_ctx.agent.name}\n"
                 f"{correlation_line}\n"
                 f"{payload.content.strip()}\n\n"
-                "Reply to the gateway main by writing a NON-chat memory item on this board:\n"
+                "Reply to the gateway main by writing a NON-chat memory item "
+                "on this board:\n"
                 f"POST {base_url}/api/v1/agent/boards/{board.id}/memory\n"
-                f'Body: {{"content":"...","tags":{tags_json},"source":"{reply_source}"}}\n'
+                f'Body: {{"content":"...","tags":{tags_json},'
+                f'"source":"{reply_source}"}}\n'
                 "Do NOT reply in OpenClaw chat."
             )
             await ensure_session(lead_session_key, config=config, label=lead.name)
             await send_message(message, session_key=lead_session_key, config=config)
-            results.append(
-                GatewayLeadBroadcastBoardResult(
-                    board_id=board.id,
-                    lead_agent_id=lead.id,
-                    lead_agent_name=lead.name,
-                    ok=True,
-                )
+            return GatewayLeadBroadcastBoardResult(
+                board_id=board.id,
+                lead_agent_id=lead.id,
+                lead_agent_name=lead.name,
+                ok=True,
             )
-            sent += 1
         except (HTTPException, OpenClawGatewayError, ValueError) as exc:
-            results.append(
-                GatewayLeadBroadcastBoardResult(
-                    board_id=board.id,
-                    ok=False,
-                    error=str(exc),
-                )
+            return GatewayLeadBroadcastBoardResult(
+                board_id=board.id,
+                ok=False,
+                error=str(exc),
             )
+
+    for board in boards:
+        board_result = await _send_to_board(board)
+        results.append(board_result)
+        if board_result.ok:
+            sent += 1
+        else:
             failed += 1
 
     record_activity(

@@ -1,14 +1,23 @@
+"""Schemas for board create/update/read API operations."""
+
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime  # noqa: TCH003
 from typing import Self
-from uuid import UUID
+from uuid import UUID  # noqa: TCH003
 
 from pydantic import model_validator
 from sqlmodel import SQLModel
 
+_ERR_GOAL_FIELDS_REQUIRED = (
+    "Confirmed goal boards require objective and success_metrics"
+)
+_ERR_GATEWAY_REQUIRED = "gateway_id is required"
+
 
 class BoardBase(SQLModel):
+    """Shared board fields used across create and read payloads."""
+
     name: str
     slug: str
     gateway_id: UUID | None = None
@@ -22,17 +31,25 @@ class BoardBase(SQLModel):
 
 
 class BoardCreate(BoardBase):
+    """Payload for creating a board."""
+
     gateway_id: UUID
 
     @model_validator(mode="after")
     def validate_goal_fields(self) -> Self:
-        if self.board_type == "goal" and self.goal_confirmed:
-            if not self.objective or not self.success_metrics:
-                raise ValueError("Confirmed goal boards require objective and success_metrics")
+        """Require goal details when creating a confirmed goal board."""
+        if (
+            self.board_type == "goal"
+            and self.goal_confirmed
+            and (not self.objective or not self.success_metrics)
+        ):
+            raise ValueError(_ERR_GOAL_FIELDS_REQUIRED)
         return self
 
 
 class BoardUpdate(SQLModel):
+    """Payload for partial board updates."""
+
     name: str | None = None
     slug: str | None = None
     gateway_id: UUID | None = None
@@ -46,13 +63,16 @@ class BoardUpdate(SQLModel):
 
     @model_validator(mode="after")
     def validate_gateway_id(self) -> Self:
+        """Reject explicit null gateway IDs in patch payloads."""
         # Treat explicit null like "unset" is invalid for patch updates.
         if "gateway_id" in self.model_fields_set and self.gateway_id is None:
-            raise ValueError("gateway_id is required")
+            raise ValueError(_ERR_GATEWAY_REQUIRED)
         return self
 
 
 class BoardRead(BoardBase):
+    """Board payload returned from read endpoints."""
+
     id: UUID
     organization_id: UUID
     created_at: datetime
