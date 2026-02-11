@@ -8,9 +8,10 @@ const setLocalAuthTokenMock = vi.hoisted(() => vi.fn());
 const fetchMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/auth/localAuth", async () => {
-  const actual = await vi.importActual<typeof import("@/auth/localAuth")>(
-    "@/auth/localAuth",
-  );
+  const actual =
+    await vi.importActual<typeof import("@/auth/localAuth")>(
+      "@/auth/localAuth",
+    );
   return {
     ...actual,
     setLocalAuthToken: setLocalAuthTokenMock,

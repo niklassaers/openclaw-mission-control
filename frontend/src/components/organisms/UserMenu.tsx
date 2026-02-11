@@ -44,8 +44,10 @@ export function UserMenu({
   const avatarLabelSource =
     displayNameFromDb ?? (localMode ? "Local User" : user?.id) ?? "U";
   const avatarLabel = avatarLabelSource.slice(0, 1).toUpperCase();
-  const displayName = displayNameFromDb ?? (localMode ? "Local User" : "Account");
-  const displayEmail = displayEmailFromDb ?? (localMode ? "local@localhost" : "");
+  const displayName =
+    displayNameFromDb ?? (localMode ? "Local User" : "Account");
+  const displayEmail =
+    displayEmailFromDb ?? (localMode ? "local@localhost" : "");
 
   return (
     <Popover open={open} onOpenChange={setOpen}>

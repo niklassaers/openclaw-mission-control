@@ -132,7 +132,12 @@ export function LocalAuthLogin({ onAuthenticated }: LocalAuthLoginProps) {
                 Token must be at least {LOCAL_AUTH_TOKEN_MIN_LENGTH} characters.
               </p>
             )}
-            <Button type="submit" className="w-full" size="lg" disabled={isValidating}>
+            <Button
+              type="submit"
+              className="w-full"
+              size="lg"
+              disabled={isValidating}
+            >
               {isValidating ? "Validating..." : "Continue"}
             </Button>
           </form>
