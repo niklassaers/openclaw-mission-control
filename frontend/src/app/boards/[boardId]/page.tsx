@@ -2239,6 +2239,28 @@ export default function BoardDetailPage() {
     });
   }, [openComments, selectedTask, taskById]);
 
+  const selectedTaskResolvedDependencies = useMemo<
+    DependencyBannerDependency[]
+  >(() => {
+    if (!selectedTask) return [];
+    return tasks
+      .filter((task) => task.depends_on_task_ids?.includes(selectedTask.id))
+      .map((task) => {
+        const statusLabel = task.status ? task.status.replace(/_/g, " ") : "unknown";
+        return {
+          id: task.id,
+          title: task.title,
+          statusLabel,
+          isBlocking: false,
+          isDone: task.status === "done",
+          onClick: () => {
+            openComments({ id: task.id });
+          },
+          disabled: false,
+        };
+      });
+  }, [openComments, selectedTask, tasks]);
+
   useEffect(() => {
     if (!taskIdFromUrl) return;
     if (openedTaskIdFromUrlRef.current === taskIdFromUrl) return;
@@ -3410,15 +3432,44 @@ export default function BoardDetailPage() {
               <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
                 Dependencies
               </p>
-              <DependencyBanner
-                dependencies={selectedTaskDependencies}
-                emptyMessage="No dependencies."
-              >
-                {selectedTask?.is_blocked
-                  ? "Blocked by incomplete dependencies."
-                  : null}
-              </DependencyBanner>
-            </div>
+              {(() => {
+                const hasDependencies =
+                  (selectedTask?.depends_on_task_ids?.length ?? 0) > 0;
+                const hasResolvedDependencies =
+                  selectedTaskResolvedDependencies.length > 0;
+                const isDependencyModeBlocked = hasDependencies
+                  ? selectedTask?.is_blocked === true
+                  : false;
+                const bannerVariant =
+                  hasDependencies || hasResolvedDependencies
+                    ? isDependencyModeBlocked
+                      ? "blocked"
+                      : "resolved"
+                    : "blocked";
+                const displayedDependencies =
+                  hasDependencies && selectedTask
+                    ? selectedTaskDependencies
+                    : selectedTaskResolvedDependencies;
+                const childrenMessage =
+                  hasDependencies && selectedTask?.is_blocked
+                    ? "Blocked by incomplete dependencies."
+                    : hasDependencies
+                      ? "Dependencies resolved."
+                      : hasResolvedDependencies
+                        ? "This task resolves these tasks."
+                        : null;
+
+                return (
+                  <DependencyBanner
+                    dependencies={displayedDependencies}
+                    variant={bannerVariant}
+                    emptyMessage="No dependencies."
+                  >
+                    {childrenMessage}
+                  </DependencyBanner>
+                );
+              })()}
+              </div>
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">

@@ -20,6 +20,8 @@ interface DependencyBannerProps {
   emptyMessage?: string;
 }
 
+type DependencyBannerVariant = "blocked" | "resolved";
+
 const toneClassByVariant: Record<DependencyBannerVariant, string> = {
   blocked: "border-rose-200 bg-rose-50 text-rose-700",
   resolved: "border-blue-200 bg-blue-50 text-blue-700",
