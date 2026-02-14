@@ -5,7 +5,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, FastAPI, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi_pagination import add_pagination
 
@@ -34,6 +34,7 @@ from app.core.config import settings
 from app.core.error_handling import install_error_handling
 from app.core.logging import configure_logging, get_logger
 from app.db.session import init_db
+from app.schemas.health import HealthStatusResponse
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -124,22 +125,58 @@ else:
 install_error_handling(app)
 
 
-@app.get("/health", tags=["health"])
-def health() -> dict[str, bool]:
+@app.get(
+    "/health",
+    tags=["health"],
+    response_model=HealthStatusResponse,
+    summary="Health Check",
+    description="Lightweight liveness probe endpoint.",
+    responses={
+        status.HTTP_200_OK: {
+            "description": "Service is alive.",
+            "content": {"application/json": {"example": {"ok": True}}},
+        }
+    },
+)
+def health() -> HealthStatusResponse:
     """Lightweight liveness probe endpoint."""
-    return {"ok": True}
+    return HealthStatusResponse(ok=True)
 
 
-@app.get("/healthz", tags=["health"])
-def healthz() -> dict[str, bool]:
+@app.get(
+    "/healthz",
+    tags=["health"],
+    response_model=HealthStatusResponse,
+    summary="Health Alias Check",
+    description="Alias liveness probe endpoint for platform compatibility.",
+    responses={
+        status.HTTP_200_OK: {
+            "description": "Service is alive.",
+            "content": {"application/json": {"example": {"ok": True}}},
+        }
+    },
+)
+def healthz() -> HealthStatusResponse:
     """Alias liveness probe endpoint for platform compatibility."""
-    return {"ok": True}
+    return HealthStatusResponse(ok=True)
 
 
-@app.get("/readyz", tags=["health"])
-def readyz() -> dict[str, bool]:
+@app.get(
+    "/readyz",
+    tags=["health"],
+    response_model=HealthStatusResponse,
+    summary="Readiness Check",
+    description="Readiness probe endpoint for service orchestration checks.",
+    responses={
+        status.HTTP_200_OK: {
+            "description": "Service is ready.",
+            "content": {"application/json": {"example": {"ok": True}}},
+        }
+    },
+)
+def readyz() -> HealthStatusResponse:
     """Readiness probe endpoint for service orchestration checks."""
-    return {"ok": True}
+    return HealthStatusResponse(ok=True)
 
 
 api_v1 = APIRouter(prefix="/api/v1")
