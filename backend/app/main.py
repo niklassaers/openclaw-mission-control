@@ -42,6 +42,12 @@ configure_logging()
 logger = get_logger(__name__)
 OPENAPI_TAGS = [
     {
+        "name": "auth",
+        "description": (
+            "Authentication bootstrap endpoints for resolving caller identity and session context."
+        ),
+    },
+    {
         "name": "health",
         "description": (
             "Service liveness/readiness probes used by infrastructure and runtime checks."
