@@ -5,4 +5,7 @@
  * OpenAPI spec version: 0.1.0
  */
 
+/**
+ * Optional profile hints used by routing and policy checks.
+ */
 export type AgentReadIdentityProfile = { [key: string]: unknown } | null;

@@ -8,6 +8,7 @@
 export type SyncGatewayTemplatesApiV1GatewaysGatewayIdTemplatesSyncPostParams =
   {
     include_main?: boolean;
+    lead_only?: boolean;
     reset_sessions?: boolean;
     rotate_tokens?: boolean;
     force_bootstrap?: boolean;

@@ -9,6 +9,9 @@
  * Nudge message payload for pinging an agent.
  */
 export interface AgentNudge {
-  /** @minLength 1 */
+  /**
+   * Short message to direct an agent toward immediate attention.
+   * @minLength 1
+   */
   message: string;
 }

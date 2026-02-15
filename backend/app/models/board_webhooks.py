@@ -20,6 +20,7 @@ class BoardWebhook(QueryModel, table=True):
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     board_id: UUID = Field(foreign_key="boards.id", index=True)
+    agent_id: UUID | None = Field(default=None, foreign_key="agents.id", index=True)
     description: str
     enabled: bool = Field(default=True, index=True)
     created_at: datetime = Field(default_factory=utcnow)

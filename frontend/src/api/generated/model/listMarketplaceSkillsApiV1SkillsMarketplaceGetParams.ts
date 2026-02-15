@@ -7,4 +7,13 @@
 
 export type ListMarketplaceSkillsApiV1SkillsMarketplaceGetParams = {
   gateway_id: string;
+  search?: string | null;
+  category?: string | null;
+  risk?: string | null;
+  pack_id?: string | null;
+  limit?: number | null;
+  /**
+   * @minimum 0
+   */
+  offset?: number;
 };

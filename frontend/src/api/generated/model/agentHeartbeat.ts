@@ -9,5 +9,6 @@
  * Heartbeat status payload sent by agents.
  */
 export interface AgentHeartbeat {
+  /** Agent health status string. */
   status?: string | null;
 }

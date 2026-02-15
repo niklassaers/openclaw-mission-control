@@ -10,10 +10,17 @@ import type { GatewayLeadMessageRequestKind } from "./gatewayLeadMessageRequestK
  * Request payload for sending a message to a board lead agent.
  */
 export interface GatewayLeadMessageRequest {
-  /** @minLength 1 */
-  content: string;
-  correlation_id?: string | null;
+  /** Routing mode for lead messages. */
   kind?: GatewayLeadMessageRequestKind;
-  reply_source?: string | null;
+  /** Optional correlation token shared across upstream and downstream systems. */
+  correlation_id?: string | null;
+  /**
+   * Human-readable body sent to lead agents.
+   * @minLength 1
+   */
+  content: string;
+  /** Tags required by reply templates when the lead responds. */
   reply_tags?: string[];
+  /** Reply destination key for the orchestrator. */
+  reply_source?: string | null;
 }

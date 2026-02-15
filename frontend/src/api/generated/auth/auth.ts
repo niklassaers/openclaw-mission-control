@@ -12,27 +12,38 @@ import type {
   UseMutationResult,
 } from "@tanstack/react-query";
 
-import type { UserRead } from ".././model";
+import type { LLMErrorResponse, UserRead } from ".././model";
 
 import { customFetch } from "../../mutator";
 
 type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
 
 /**
- * Return the authenticated user profile from token claims.
- * @summary Bootstrap User
+ * Resolve caller identity from auth headers and return the canonical user profile. This endpoint does not accept a request body.
+ * @summary Bootstrap Authenticated User Context
  */
 export type bootstrapUserApiV1AuthBootstrapPostResponse200 = {
   data: UserRead;
   status: 200;
 };
 
+export type bootstrapUserApiV1AuthBootstrapPostResponse401 = {
+  data: LLMErrorResponse;
+  status: 401;
+};
+
 export type bootstrapUserApiV1AuthBootstrapPostResponseSuccess =
   bootstrapUserApiV1AuthBootstrapPostResponse200 & {
     headers: Headers;
   };
+export type bootstrapUserApiV1AuthBootstrapPostResponseError =
+  bootstrapUserApiV1AuthBootstrapPostResponse401 & {
+    headers: Headers;
+  };
+
 export type bootstrapUserApiV1AuthBootstrapPostResponse =
-  bootstrapUserApiV1AuthBootstrapPostResponseSuccess;
+  | bootstrapUserApiV1AuthBootstrapPostResponseSuccess
+  | bootstrapUserApiV1AuthBootstrapPostResponseError;
 
 export const getBootstrapUserApiV1AuthBootstrapPostUrl = () => {
   return `/api/v1/auth/bootstrap`;
@@ -51,7 +62,7 @@ export const bootstrapUserApiV1AuthBootstrapPost = async (
 };
 
 export const getBootstrapUserApiV1AuthBootstrapPostMutationOptions = <
-  TError = unknown,
+  TError = LLMErrorResponse,
   TContext = unknown,
 >(options?: {
   mutation?: UseMutationOptions<
@@ -90,13 +101,13 @@ export type BootstrapUserApiV1AuthBootstrapPostMutationResult = NonNullable<
   Awaited<ReturnType<typeof bootstrapUserApiV1AuthBootstrapPost>>
 >;
 
-export type BootstrapUserApiV1AuthBootstrapPostMutationError = unknown;
+export type BootstrapUserApiV1AuthBootstrapPostMutationError = LLMErrorResponse;
 
 /**
- * @summary Bootstrap User
+ * @summary Bootstrap Authenticated User Context
  */
 export const useBootstrapUserApiV1AuthBootstrapPost = <
-  TError = unknown,
+  TError = LLMErrorResponse,
   TContext = unknown,
 >(
   options?: {

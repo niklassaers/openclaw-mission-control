@@ -17,6 +17,7 @@ class BoardWebhookCreate(SQLModel):
 
     description: NonEmptyStr
     enabled: bool = True
+    agent_id: UUID | None = None
 
 
 class BoardWebhookUpdate(SQLModel):
@@ -24,6 +25,7 @@ class BoardWebhookUpdate(SQLModel):
 
     description: NonEmptyStr | None = None
     enabled: bool | None = None
+    agent_id: UUID | None = None
 
 
 class BoardWebhookRead(SQLModel):
@@ -31,6 +33,7 @@ class BoardWebhookRead(SQLModel):
 
     id: UUID
     board_id: UUID
+    agent_id: UUID | None = None
     description: str
     enabled: bool
     endpoint_path: str

@@ -5,6 +5,9 @@
  * OpenAPI spec version: 0.1.0
  */
 
+/**
+ * Broadcast intent. `question` asks for responses; `handoff` requests transfer.
+ */
 export type GatewayLeadBroadcastRequestKind =
   (typeof GatewayLeadBroadcastRequestKind)[keyof typeof GatewayLeadBroadcastRequestKind];
 

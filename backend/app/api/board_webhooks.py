@@ -64,6 +64,7 @@ def _to_webhook_read(webhook: BoardWebhook) -> BoardWebhookRead:
     return BoardWebhookRead(
         id=webhook.id,
         board_id=webhook.board_id,
+        agent_id=webhook.agent_id,
         description=webhook.description,
         enabled=webhook.enabled,
         endpoint_path=endpoint_path,
@@ -206,12 +207,18 @@ async def _notify_lead_on_webhook_payload(
     webhook: BoardWebhook,
     payload: BoardWebhookPayload,
 ) -> None:
-    lead = (
-        await Agent.objects.filter_by(board_id=board.id)
-        .filter(col(Agent.is_board_lead).is_(True))
-        .first(session)
-    )
-    if lead is None or not lead.openclaw_session_id:
+    target_agent: Agent | None = None
+    if webhook.agent_id is not None:
+        target_agent = await Agent.objects.filter_by(id=webhook.agent_id, board_id=board.id).first(
+            session
+        )
+    if target_agent is None:
+        target_agent = (
+            await Agent.objects.filter_by(board_id=board.id)
+            .filter(col(Agent.is_board_lead).is_(True))
+            .first(session)
+        )
+    if target_agent is None or not target_agent.openclaw_session_id:
         return
 
     dispatch = GatewayDispatchService(session)
@@ -236,12 +243,28 @@ async def _notify_lead_on_webhook_payload(
         f"GET /api/v1/agent/boards/{board.id}/memory?is_chat=false"
     )
     await dispatch.try_send_agent_message(
-        session_key=lead.openclaw_session_id,
+        session_key=target_agent.openclaw_session_id,
         config=config,
-        agent_name=lead.name,
+        agent_name=target_agent.name,
         message=message,
         deliver=False,
     )
+
+
+async def _validate_agent_id(
+    *,
+    session: AsyncSession,
+    board: Board,
+    agent_id: UUID | None,
+) -> None:
+    if agent_id is None:
+        return
+    agent = await Agent.objects.filter_by(id=agent_id, board_id=board.id).first(session)
+    if agent is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="agent_id must reference an agent on this board.",
+        )
 
 
 @router.get("", response_model=DefaultLimitOffsetPage[BoardWebhookRead])
@@ -270,8 +293,14 @@ async def create_board_webhook(
     session: AsyncSession = SESSION_DEP,
 ) -> BoardWebhookRead:
     """Create a new board webhook with a generated UUID endpoint."""
+    await _validate_agent_id(
+        session=session,
+        board=board,
+        agent_id=payload.agent_id,
+    )
     webhook = BoardWebhook(
         board_id=board.id,
+        agent_id=payload.agent_id,
         description=payload.description,
         enabled=payload.enabled,
     )
@@ -309,6 +338,11 @@ async def update_board_webhook(
     )
     updates = payload.model_dump(exclude_unset=True)
     if updates:
+        await _validate_agent_id(
+            session=session,
+            board=board,
+            agent_id=updates.get("agent_id"),
+        )
         crud.apply_updates(webhook, updates)
         webhook.updated_at = utcnow()
         await crud.save(session, webhook)

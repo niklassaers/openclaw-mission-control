@@ -5,4 +5,7 @@
  * OpenAPI spec version: 0.1.0
  */
 
+/**
+ * Optional identity profile update values.
+ */
 export type AgentUpdateIdentityProfile = { [key: string]: unknown } | null;

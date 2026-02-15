@@ -5,4 +5,7 @@
  * OpenAPI spec version: 0.1.0
  */
 
+/**
+ * Runtime heartbeat behavior overrides for this agent.
+ */
 export type AgentCreateHeartbeatConfig = { [key: string]: unknown } | null;

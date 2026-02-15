@@ -9,9 +9,14 @@
  * Per-board result entry for a lead broadcast operation.
  */
 export interface GatewayLeadBroadcastBoardResult {
+  /** Target board id for this result. */
   board_id: string;
-  error?: string | null;
+  /** Resolved lead agent id for the target board. */
   lead_agent_id?: string | null;
+  /** Resolved lead agent display name. */
   lead_agent_name?: string | null;
+  /** Whether this board delivery succeeded. */
   ok?: boolean;
+  /** Failure reason if this board failed. */
+  error?: string | null;
 }

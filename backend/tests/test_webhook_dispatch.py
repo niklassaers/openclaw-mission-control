@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -220,6 +221,128 @@ async def test_dispatch_flush_recovers_from_dequeue_error(monkeypatch: pytest.Mo
 
     assert call_count == 3
     assert processed == 1
+
+
+@pytest.mark.asyncio
+async def test_notify_target_agent_prefers_mapped_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    agent_id = uuid4()
+    mapped_agent = SimpleNamespace(
+        id=agent_id,
+        name="Mapped Agent",
+        openclaw_session_id="mapped:session",
+    )
+    lead_agent = SimpleNamespace(
+        id=uuid4(),
+        name="Lead Agent",
+        openclaw_session_id="lead:session",
+    )
+    sent: list[dict[str, str]] = []
+
+    class _FakeAgentObjects:
+        def filter_by(self, **kwargs: object) -> _FakeAgentObjects:
+            self._kwargs = kwargs
+            return self
+
+        async def first(self, session: object) -> object | None:
+            del session
+            if self._kwargs.get("id") == agent_id:
+                return mapped_agent
+            if self._kwargs.get("is_board_lead") is True:
+                return lead_agent
+            return None
+
+    class _FakeDispatchService:
+        def __init__(self, session: object) -> None:
+            del session
+
+        async def optional_gateway_config_for_board(self, board: object) -> object:
+            del board
+            return object()
+
+        async def try_send_agent_message(
+            self,
+            *,
+            session_key: str,
+            config: object,
+            agent_name: str,
+            message: str,
+            deliver: bool = False,
+        ) -> None:
+            del config, message, deliver
+            sent.append({"session_key": session_key, "agent_name": agent_name})
+
+    monkeypatch.setattr(dispatch.Agent, "objects", _FakeAgentObjects())
+    monkeypatch.setattr(dispatch, "GatewayDispatchService", _FakeDispatchService)
+
+    webhook = SimpleNamespace(id=uuid4(), description="desc", agent_id=agent_id)
+    board = SimpleNamespace(id=uuid4(), name="Board")
+    payload = SimpleNamespace(id=uuid4(), payload={"event": "test"})
+
+    await dispatch._notify_target_agent(
+        session=SimpleNamespace(),
+        board=board,
+        webhook=webhook,
+        payload=payload,
+    )
+
+    assert sent == [{"session_key": "mapped:session", "agent_name": "Mapped Agent"}]
+
+
+@pytest.mark.asyncio
+async def test_notify_target_agent_falls_back_to_lead(monkeypatch: pytest.MonkeyPatch) -> None:
+    lead_agent = SimpleNamespace(
+        id=uuid4(),
+        name="Lead Agent",
+        openclaw_session_id="lead:session",
+    )
+    sent: list[dict[str, str]] = []
+
+    class _FakeAgentObjects:
+        def filter_by(self, **kwargs: object) -> _FakeAgentObjects:
+            self._kwargs = kwargs
+            return self
+
+        async def first(self, session: object) -> object | None:
+            del session
+            if self._kwargs.get("is_board_lead") is True:
+                return lead_agent
+            return None
+
+    class _FakeDispatchService:
+        def __init__(self, session: object) -> None:
+            del session
+
+        async def optional_gateway_config_for_board(self, board: object) -> object:
+            del board
+            return object()
+
+        async def try_send_agent_message(
+            self,
+            *,
+            session_key: str,
+            config: object,
+            agent_name: str,
+            message: str,
+            deliver: bool = False,
+        ) -> None:
+            del config, message, deliver
+            sent.append({"session_key": session_key, "agent_name": agent_name})
+
+    monkeypatch.setattr(dispatch.Agent, "objects", _FakeAgentObjects())
+    monkeypatch.setattr(dispatch, "GatewayDispatchService", _FakeDispatchService)
+
+    webhook = SimpleNamespace(id=uuid4(), description="desc", agent_id=None)
+    board = SimpleNamespace(id=uuid4(), name="Board")
+    payload = SimpleNamespace(id=uuid4(), payload={"event": "test"})
+
+    await dispatch._notify_target_agent(
+        session=SimpleNamespace(),
+        board=board,
+        webhook=webhook,
+        payload=payload,
+    )
+
+    assert sent == [{"session_key": "lead:session", "agent_name": "Lead Agent"}]
 
 
 def test_dispatch_run_entrypoint_calls_async_flush(monkeypatch: pytest.MonkeyPatch) -> None:

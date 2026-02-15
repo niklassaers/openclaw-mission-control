@@ -62,15 +62,23 @@ def _webhook_message(
     )
 
 
-async def _notify_lead(
+async def _notify_target_agent(
     *,
     session: AsyncSession,
     board: Board,
     webhook: BoardWebhook,
     payload: BoardWebhookPayload,
 ) -> None:
-    lead = await Agent.objects.filter_by(board_id=board.id, is_board_lead=True).first(session)
-    if lead is None or not lead.openclaw_session_id:
+    target_agent: Agent | None = None
+    if webhook.agent_id is not None:
+        target_agent = await Agent.objects.filter_by(id=webhook.agent_id, board_id=board.id).first(
+            session
+        )
+    if target_agent is None:
+        target_agent = await Agent.objects.filter_by(board_id=board.id, is_board_lead=True).first(
+            session
+        )
+    if target_agent is None or not target_agent.openclaw_session_id:
         return
 
     dispatch = GatewayDispatchService(session)
@@ -80,9 +88,9 @@ async def _notify_lead(
 
     message = _webhook_message(board=board, webhook=webhook, payload=payload)
     await dispatch.try_send_agent_message(
-        session_key=lead.openclaw_session_id,
+        session_key=target_agent.openclaw_session_id,
         config=config,
-        agent_name=lead.name,
+        agent_name=target_agent.name,
         message=message,
         deliver=False,
     )
@@ -160,7 +168,7 @@ async def _process_single_item(item: QueuedInboundDelivery) -> None:
             return
 
         board, webhook, payload = loaded
-        await _notify_lead(session=session, board=board, webhook=webhook, payload=payload)
+        await _notify_target_agent(session=session, board=board, webhook=webhook, payload=payload)
         await session.commit()
 
 

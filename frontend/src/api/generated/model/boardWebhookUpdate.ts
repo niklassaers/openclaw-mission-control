@@ -11,4 +11,5 @@
 export interface BoardWebhookUpdate {
   description?: string | null;
   enabled?: boolean | null;
+  agent_id?: string | null;
 }

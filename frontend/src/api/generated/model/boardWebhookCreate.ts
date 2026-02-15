@@ -12,4 +12,5 @@ export interface BoardWebhookCreate {
   /** @minLength 1 */
   description: string;
   enabled?: boolean;
+  agent_id?: string | null;
 }

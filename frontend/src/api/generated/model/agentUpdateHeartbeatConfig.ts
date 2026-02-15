@@ -5,4 +5,7 @@
  * OpenAPI spec version: 0.1.0
  */
 
+/**
+ * Optional heartbeat policy override.
+ */
 export type AgentUpdateHeartbeatConfig = { [key: string]: unknown } | null;

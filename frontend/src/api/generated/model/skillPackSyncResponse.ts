@@ -9,10 +9,10 @@
  * Pack sync summary payload.
  */
 export interface SkillPackSyncResponse {
-  created: number;
   ok?: boolean;
-  warnings: string[];
   pack_id: string;
   synced: number;
+  created: number;
   updated: number;
+  warnings?: string[];
 }

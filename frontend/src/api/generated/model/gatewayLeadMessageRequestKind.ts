@@ -5,6 +5,9 @@
  * OpenAPI spec version: 0.1.0
  */
 
+/**
+ * Routing mode for lead messages.
+ */
 export type GatewayLeadMessageRequestKind =
   (typeof GatewayLeadMessageRequestKind)[keyof typeof GatewayLeadMessageRequestKind];
 

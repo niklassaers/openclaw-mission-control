@@ -16,6 +16,10 @@ import {
   useUpdateBoardApiV1BoardsBoardIdPatch,
 } from "@/api/generated/boards/boards";
 import {
+  type listAgentsApiV1AgentsGetResponse,
+  useListAgentsApiV1AgentsGet,
+} from "@/api/generated/agents/agents";
+import {
   getListBoardWebhooksApiV1BoardsBoardIdWebhooksGetQueryKey,
   type listBoardWebhooksApiV1BoardsBoardIdWebhooksGetResponse,
   useCreateBoardWebhookApiV1BoardsBoardIdWebhooksPost,
@@ -33,6 +37,7 @@ import {
 } from "@/api/generated/gateways/gateways";
 import { useOrganizationMembership } from "@/lib/use-organization-membership";
 import type {
+  AgentRead,
   BoardGroupRead,
   BoardWebhookRead,
   BoardRead,
@@ -62,8 +67,11 @@ const slugify = (value: string) =>
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/(^-|-$)/g, "") || "board";
 
+const LEAD_AGENT_VALUE = "__lead_agent__";
+
 type WebhookCardProps = {
   webhook: BoardWebhookRead;
+  agents: AgentRead[];
   isLoading: boolean;
   isWebhookCreating: boolean;
   isDeletingWebhook: boolean;
@@ -72,11 +80,16 @@ type WebhookCardProps = {
   onCopy: (webhook: BoardWebhookRead) => void;
   onDelete: (webhookId: string) => void;
   onViewPayloads: (webhookId: string) => void;
-  onUpdate: (webhookId: string, description: string) => Promise<boolean>;
+  onUpdate: (
+    webhookId: string,
+    description: string,
+    agentId: string | null,
+  ) => Promise<boolean>;
 };
 
 function WebhookCard({
   webhook,
+  agents,
   isLoading,
   isWebhookCreating,
   isDeletingWebhook,
@@ -89,20 +102,32 @@ function WebhookCard({
 }: WebhookCardProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [draftDescription, setDraftDescription] = useState(webhook.description);
+  const [draftAgentValue, setDraftAgentValue] = useState(
+    webhook.agent_id ?? LEAD_AGENT_VALUE,
+  );
 
   const isBusy =
     isLoading || isWebhookCreating || isDeletingWebhook || isUpdatingWebhook;
   const trimmedDescription = draftDescription.trim();
   const isDescriptionChanged =
     trimmedDescription !== webhook.description.trim();
+  const isAgentChanged = draftAgentValue !== (webhook.agent_id ?? LEAD_AGENT_VALUE);
+  const isChanged = isDescriptionChanged || isAgentChanged;
+  const mappedAgent = webhook.agent_id
+    ? agents.find((agent) => agent.id === webhook.agent_id) ?? null
+    : null;
 
   const handleSave = async () => {
     if (!trimmedDescription) return;
-    if (!isDescriptionChanged) {
+    if (!isChanged) {
       setIsEditing(false);
       return;
     }
-    const saved = await onUpdate(webhook.id, trimmedDescription);
+    const saved = await onUpdate(
+      webhook.id,
+      trimmedDescription,
+      draftAgentValue === LEAD_AGENT_VALUE ? null : draftAgentValue,
+    );
     if (saved) {
       setIsEditing(false);
     }
@@ -141,6 +166,7 @@ function WebhookCard({
                 variant="ghost"
                 onClick={() => {
                   setDraftDescription(webhook.description);
+                  setDraftAgentValue(webhook.agent_id ?? LEAD_AGENT_VALUE);
                   setIsEditing(false);
                 }}
                 disabled={isBusy}
@@ -162,6 +188,7 @@ function WebhookCard({
                 variant="ghost"
                 onClick={() => {
                   setDraftDescription(webhook.description);
+                  setDraftAgentValue(webhook.agent_id ?? LEAD_AGENT_VALUE);
                   setIsEditing(true);
                 }}
                 disabled={isBusy}
@@ -181,17 +208,47 @@ function WebhookCard({
         </div>
       </div>
       {isEditing ? (
-        <Textarea
-          value={draftDescription}
-          onChange={(event) => setDraftDescription(event.target.value)}
-          placeholder="Describe exactly what the lead agent should do when payloads arrive."
-          className="min-h-[90px]"
-          disabled={isBusy}
-        />
+        <>
+          <Textarea
+            value={draftDescription}
+            onChange={(event) => setDraftDescription(event.target.value)}
+            placeholder="Describe exactly what the lead agent should do when payloads arrive."
+            className="min-h-[90px]"
+            disabled={isBusy}
+          />
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-slate-900">Agent</label>
+            <Select
+              value={draftAgentValue}
+              onValueChange={setDraftAgentValue}
+              disabled={isBusy}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Lead agent (default fallback)" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={LEAD_AGENT_VALUE}>
+                  Lead agent (default fallback)
+                </SelectItem>
+                {agents.map((agent) => (
+                  <SelectItem key={agent.id} value={agent.id}>
+                    {agent.name}
+                    {agent.is_board_lead ? " (lead)" : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </>
       ) : (
-        <div className="text-sm text-slate-700">
-          <Markdown content={webhook.description || ""} variant="description" />
-        </div>
+        <>
+          <div className="text-sm text-slate-700">
+            <Markdown content={webhook.description || ""} variant="description" />
+          </div>
+          <p className="text-xs text-slate-600">
+            Recipient: {mappedAgent?.name ?? "Lead agent"}
+          </p>
+        </>
       )}
       <div className="rounded-md bg-slate-50 px-3 py-2">
         <code className="break-all text-xs text-slate-700">
@@ -246,6 +303,7 @@ export default function EditBoardPage() {
   const [error, setError] = useState<string | null>(null);
   const [metricsError, setMetricsError] = useState<string | null>(null);
   const [webhookDescription, setWebhookDescription] = useState("");
+  const [webhookAgentValue, setWebhookAgentValue] = useState(LEAD_AGENT_VALUE);
   const [webhookError, setWebhookError] = useState<string | null>(null);
   const [copiedWebhookId, setCopiedWebhookId] = useState<string | null>(null);
 
@@ -343,6 +401,19 @@ export default function EditBoardPage() {
       },
     },
   );
+  const agentsQuery = useListAgentsApiV1AgentsGet<
+    listAgentsApiV1AgentsGetResponse,
+    ApiError
+  >(
+    { board_id: boardId ?? null, limit: 200 },
+    {
+      query: {
+        enabled: Boolean(isSignedIn && isAdmin && boardId),
+        refetchOnMount: "always",
+        retry: false,
+      },
+    },
+  );
 
   const updateBoardMutation = useUpdateBoardApiV1BoardsBoardIdPatch<ApiError>({
     mutation: {
@@ -362,6 +433,7 @@ export default function EditBoardPage() {
         onSuccess: async () => {
           if (!boardId) return;
           setWebhookDescription("");
+          setWebhookAgentValue(LEAD_AGENT_VALUE);
           await queryClient.invalidateQueries({
             queryKey:
               getListBoardWebhooksApiV1BoardsBoardIdWebhooksGetQueryKey(
@@ -470,7 +542,10 @@ export default function EditBoardPage() {
     boardQuery.error?.message ??
     null;
   const webhookErrorMessage =
-    webhookError ?? webhooksQuery.error?.message ?? null;
+    webhookError ??
+    webhooksQuery.error?.message ??
+    agentsQuery.error?.message ??
+    null;
 
   const isFormReady = Boolean(
     resolvedName.trim() && resolvedDescription.trim() && displayGatewayId,
@@ -493,6 +568,10 @@ export default function EditBoardPage() {
     ],
     [groups],
   );
+  const webhookAgents = useMemo<AgentRead[]>(() => {
+    if (agentsQuery.data?.status !== 200) return [];
+    return agentsQuery.data.data.items ?? [];
+  }, [agentsQuery.data]);
   const webhooks = useMemo<BoardWebhookRead[]>(() => {
     if (webhooksQuery.data?.status !== 200) return [];
     return webhooksQuery.data.data.items ?? [];
@@ -595,11 +674,14 @@ export default function EditBoardPage() {
       return;
     }
     setWebhookError(null);
+    const mappedAgentId =
+      webhookAgentValue === LEAD_AGENT_VALUE ? null : webhookAgentValue;
     createWebhookMutation.mutate({
       boardId,
       data: {
         description: trimmedDescription,
         enabled: true,
+        agent_id: mappedAgentId,
       },
     });
   };
@@ -614,6 +696,7 @@ export default function EditBoardPage() {
   const handleUpdateWebhook = async (
     webhookId: string,
     description: string,
+    agentId: string | null,
   ): Promise<boolean> => {
     if (!boardId) return false;
     if (updateWebhookMutation.isPending) return false;
@@ -627,7 +710,10 @@ export default function EditBoardPage() {
       await updateWebhookMutation.mutateAsync({
         boardId,
         webhookId,
-        data: { description: trimmedDescription },
+        data: {
+          description: trimmedDescription,
+          agent_id: agentId,
+        },
       });
       return true;
     } catch {
@@ -1049,6 +1135,31 @@ export default function EditBoardPage() {
                   className="min-h-[90px]"
                   disabled={isLoading || isWebhookBusy}
                 />
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-slate-900">
+                    Agent
+                  </label>
+                  <Select
+                    value={webhookAgentValue}
+                    onValueChange={setWebhookAgentValue}
+                    disabled={isLoading || isWebhookBusy}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Lead agent (default fallback)" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={LEAD_AGENT_VALUE}>
+                        Lead agent (default fallback)
+                      </SelectItem>
+                      {webhookAgents.map((agent) => (
+                        <SelectItem key={agent.id} value={agent.id}>
+                          {agent.name}
+                          {agent.is_board_lead ? " (lead)" : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
                 <div className="flex justify-end">
                   <Button
                     type="button"
@@ -1089,6 +1200,7 @@ export default function EditBoardPage() {
                     <WebhookCard
                       key={webhook.id}
                       webhook={webhook}
+                      agents={webhookAgents}
                       isLoading={isLoading}
                       isWebhookCreating={isWebhookCreating}
                       isDeletingWebhook={isDeletingWebhook}

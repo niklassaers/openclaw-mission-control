@@ -11,5 +11,4 @@
 export interface BoardGroupHeartbeatApply {
   every: string;
   include_board_leads?: boolean;
-  target?: string | null;
 }

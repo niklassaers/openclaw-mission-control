@@ -4,19 +4,20 @@
  * Mission Control API
  * OpenAPI spec version: 0.1.0
  */
+import type { SkillPackReadMetadata } from "./skillPackReadMetadata";
 
 /**
  * Serialized skill pack record.
  */
 export interface SkillPackRead {
-  created_at: string;
-  description?: string | null;
   id: string;
-  branch: string;
-  name: string;
   organization_id: string;
-  metadata: Record<string, object>;
-  skill_count?: number;
+  name: string;
+  description?: string | null;
   source_url: string;
+  branch: string;
+  metadata?: SkillPackReadMetadata;
+  skill_count?: number;
+  created_at: string;
   updated_at: string;
 }

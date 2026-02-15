@@ -4,19 +4,21 @@
  * Mission Control API
  * OpenAPI spec version: 0.1.0
  */
+import type { MarketplaceSkillReadMetadata } from "./marketplaceSkillReadMetadata";
 
 /**
  * Serialized marketplace skill catalog record.
  */
 export interface MarketplaceSkillRead {
-  category?: string | null;
-  created_at: string;
-  description?: string | null;
   id: string;
-  name: string;
   organization_id: string;
+  name: string;
+  description?: string | null;
+  category?: string | null;
   risk?: string | null;
   source?: string | null;
   source_url: string;
+  metadata?: MarketplaceSkillReadMetadata;
+  created_at: string;
   updated_at: string;
 }
