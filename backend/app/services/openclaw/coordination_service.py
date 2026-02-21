@@ -613,14 +613,13 @@ class GatewayCoordinationService(AbstractGatewayMessagingService):
         db_updated = False
         if filename == "SOUL.md":
             target.soul_template = normalized_content
-            target.updated_at = utcnow()
             db_updated = True
         elif filename == "IDENTITY.md":
             target.identity_template = normalized_content
-            target.updated_at = utcnow()
             db_updated = True
 
         if db_updated:
+            target.updated_at = utcnow()
             self.session.add(target)
             await self.session.commit()
 
