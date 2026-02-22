@@ -35,6 +35,26 @@ def test_extract_connect_server_version_returns_none_when_server_version_missing
     assert gateway_compat.extract_connect_server_version(payload) is None
 
 
+def test_extract_config_last_touched_version_reads_config_meta_last_touched_version() -> None:
+    payload = {
+        "config": {
+            "meta": {"lastTouchedVersion": "2026.2.9"},
+            "wizard": {"lastRunVersion": "2026.2.8"},
+        },
+        "parsed": {"meta": {"lastTouchedVersion": "2026.2.7"}},
+    }
+
+    assert gateway_compat.extract_config_last_touched_version(payload) == "2026.2.9"
+
+
+def test_extract_config_last_touched_version_returns_none_without_config_meta_last_touched_version() -> None:
+    payload = {
+        "config": {"wizard": {"lastRunVersion": "2026.2.9"}},
+    }
+
+    assert gateway_compat.extract_config_last_touched_version(payload) is None
+
+
 @pytest.mark.parametrize(
     ("current_version", "minimum_version", "expected_compatible"),
     [
@@ -97,7 +117,12 @@ async def test_check_gateway_version_compatibility_uses_connect_server_version_o
             "server": {"version": "2026.2.13"},
         }
 
+    async def _fake_openclaw_call(method: str, params: object = None, *, config: object) -> object:
+        _ = (method, params, config)
+        raise AssertionError("config.get fallback should not run for valid connect version")
+
     monkeypatch.setattr(gateway_compat, "openclaw_connect_metadata", _fake_connect_metadata)
+    monkeypatch.setattr(gateway_compat, "openclaw_call", _fake_openclaw_call)
 
     result = await gateway_compat.check_gateway_version_compatibility(
         GatewayConfig(url="ws://gateway.example/ws"),
@@ -116,7 +141,13 @@ async def test_check_gateway_version_compatibility_fails_without_server_version(
         _ = config
         return {"runtime": {"version": "2026.2.13"}}
 
+    async def _fake_openclaw_call(method: str, params: object = None, *, config: object) -> object:
+        _ = (params, config)
+        assert method == "config.get"
+        return {"config": {}}
+
     monkeypatch.setattr(gateway_compat, "openclaw_connect_metadata", _fake_connect_metadata)
+    monkeypatch.setattr(gateway_compat, "openclaw_call", _fake_openclaw_call)
 
     result = await gateway_compat.check_gateway_version_compatibility(
         GatewayConfig(url="ws://gateway.example/ws"),
@@ -129,14 +160,44 @@ async def test_check_gateway_version_compatibility_fails_without_server_version(
 
 
 @pytest.mark.asyncio
-async def test_check_gateway_version_compatibility_rejects_non_calver_server_version(
+async def test_check_gateway_version_compatibility_uses_config_get_fallback_when_connect_is_dev(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def _fake_connect_metadata(*, config: GatewayConfig) -> object | None:
         _ = config
         return {"server": {"version": "dev"}}
 
+    async def _fake_openclaw_call(method: str, params: object = None, *, config: object) -> object:
+        _ = (params, config)
+        assert method == "config.get"
+        return {"config": {"meta": {"lastTouchedVersion": "2026.2.9"}}}
+
     monkeypatch.setattr(gateway_compat, "openclaw_connect_metadata", _fake_connect_metadata)
+    monkeypatch.setattr(gateway_compat, "openclaw_call", _fake_openclaw_call)
+
+    result = await gateway_compat.check_gateway_version_compatibility(
+        GatewayConfig(url="ws://gateway.example/ws"),
+        minimum_version="2026.1.30",
+    )
+
+    assert result.compatible is True
+    assert result.current_version == "2026.2.9"
+
+
+@pytest.mark.asyncio
+async def test_check_gateway_version_compatibility_rejects_non_calver_server_version_when_fallback_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_connect_metadata(*, config: GatewayConfig) -> object | None:
+        _ = config
+        return {"server": {"version": "dev"}}
+
+    async def _fake_openclaw_call(method: str, params: object = None, *, config: object) -> object:
+        _ = (method, params, config)
+        raise OpenClawGatewayError("method unavailable")
+
+    monkeypatch.setattr(gateway_compat, "openclaw_connect_metadata", _fake_connect_metadata)
+    monkeypatch.setattr(gateway_compat, "openclaw_call", _fake_openclaw_call)
 
     result = await gateway_compat.check_gateway_version_compatibility(
         GatewayConfig(url="ws://gateway.example/ws"),

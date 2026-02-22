@@ -6,8 +6,11 @@ import re
 from dataclasses import dataclass
 
 from app.core.config import settings
+from app.core.logging import get_logger
 from app.services.openclaw.gateway_rpc import (
     GatewayConfig,
+    OpenClawGatewayError,
+    openclaw_call,
     openclaw_connect_metadata,
 )
 
@@ -16,6 +19,8 @@ _CALVER_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _CONNECT_VERSION_PATH: tuple[str, ...] = ("server", "version")
+_CONFIG_VERSION_PATH: tuple[str, ...] = ("config", "meta", "lastTouchedVersion")
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +89,11 @@ def extract_connect_server_version(payload: object) -> str | None:
     return _coerce_version_string(_value_at_path(payload, _CONNECT_VERSION_PATH))
 
 
+def extract_config_last_touched_version(payload: object) -> str | None:
+    """Extract a runtime version hint from config.get payload."""
+    return _coerce_version_string(_value_at_path(payload, _CONFIG_VERSION_PATH))
+
+
 def evaluate_gateway_version(
     *,
     current_version: str | None,
@@ -150,9 +160,21 @@ async def check_gateway_version_compatibility(
     *,
     minimum_version: str | None = None,
 ) -> GatewayVersionCheckResult:
-    """Use connect metadata server.version and evaluate compatibility."""
+    """Evaluate gateway compatibility using connect metadata with config fallback."""
     connect_payload = await openclaw_connect_metadata(config=config)
     current_version = extract_connect_server_version(connect_payload)
+    if current_version is None or _parse_version_parts(current_version) is None:
+        try:
+            config_payload = await openclaw_call("config.get", config=config)
+        except OpenClawGatewayError as exc:
+            logger.debug(
+                "gateway.compat.config_get_fallback_unavailable reason=%s",
+                str(exc),
+            )
+        else:
+            fallback_version = extract_config_last_touched_version(config_payload)
+            if fallback_version is not None:
+                current_version = fallback_version
     return evaluate_gateway_version(
         current_version=current_version,
         minimum_version=minimum_version,
