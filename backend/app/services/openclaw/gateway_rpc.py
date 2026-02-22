@@ -195,7 +195,12 @@ def _redacted_url_for_log(raw_url: str) -> str:
 
 
 def _create_ssl_context(config: GatewayConfig) -> ssl.SSLContext | None:
-    """Create an SSL context override when insecure TLS is explicitly enabled."""
+    """Create an insecure SSL context override for explicit opt-in TLS bypass.
+
+    This behavior is intentionally host-agnostic: when ``allow_insecure_tls`` is
+    enabled for a ``wss://`` gateway, certificate and hostname verification are
+    disabled for that gateway connection.
+    """
     parsed = urlparse(config.url)
     if parsed.scheme != "wss":
         return None
