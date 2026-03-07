@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -20,8 +23,16 @@ from app.models.activity_events import ActivityEvent
 from app.models.agents import Agent
 from app.models.approvals import Approval
 from app.models.boards import Board
+from app.models.gateways import Gateway
 from app.models.tasks import Task
 from app.schemas.metrics import (
+    AgentWorkloadAgent,
+    AgentWorkloadSnapshot,
+    AgentWorkloadSummary,
+    AgentWorkloadTaskCounts,
+    CalendarEvent,
+    CalendarOverview,
+    CalendarWarning,
     DashboardBucketKey,
     DashboardKpis,
     DashboardMetrics,
@@ -35,11 +46,26 @@ from app.schemas.metrics import (
     DashboardWipRangeSeries,
     DashboardWipSeriesSet,
 )
+from app.services.openclaw.gateway_resolver import gateway_client_config
+from app.services.openclaw.gateway_rpc import OpenClawGatewayError, openclaw_call
 from app.services.organizations import OrganizationContext, list_accessible_board_ids
 
 router = APIRouter(prefix="/metrics", tags=["metrics"])
 
 ERROR_EVENT_PATTERN = "%failed"
+_AGENT_WORKLOAD_STATUSES = ("inbox", "in_progress", "review", "done")
+_CRON_ITEM_KEYS = ("items", "jobs", "entries", "crons", "data")
+_CRON_BOARD_KEYS = (
+    "board_id",
+    "boardId",
+    "workspace_id",
+    "workspaceId",
+    "project_id",
+    "projectId",
+    "board",
+)
+_CRON_SCHEDULE_KEYS = ("schedule", "cron", "expression", "pattern", "value")
+_CRON_ENABLED_KEYS = ("enabled", "isEnabled", "active", "flag", "run")
 _RUNTIME_TYPE_REFERENCES = (UUID, AsyncSession)
 RANGE_QUERY = Query(default="24h")
 BOARD_ID_QUERY = Query(default=None)
@@ -477,6 +503,378 @@ async def _resolve_dashboard_board_ids(
     if board_id is not None:
         return [board_id] if board_id in set(group_board_ids) else []
     return group_board_ids
+
+
+def _initial_workload_counts() -> dict[str, int]:
+    return {status_key: 0 for status_key in _AGENT_WORKLOAD_STATUSES}
+
+
+async def _agent_task_counts(
+    session: AsyncSession,
+    board_ids: list[UUID],
+) -> dict[UUID, dict[str, int]]:
+    if not board_ids:
+        return {}
+    statement = (
+        select(
+            col(Task.assigned_agent_id),
+            col(Task.status),
+            func.count(),
+        )
+        .where(col(Task.assigned_agent_id).is_not(None))
+        .where(col(Task.board_id).in_(board_ids))
+        .group_by(col(Task.assigned_agent_id), col(Task.status))
+    )
+    rows = (await session.exec(statement)).all()
+    counts: dict[UUID, dict[str, int]] = {}
+    for agent_id, task_status, total in rows:
+        if agent_id is None:
+            continue
+        normalized_status = str(task_status or "").lower()
+        if normalized_status not in _AGENT_WORKLOAD_STATUSES:
+            continue
+        bucket = counts.setdefault(agent_id, _initial_workload_counts())
+        bucket[normalized_status] = int(total or 0)
+    return counts
+
+
+def _agent_workload_agents(
+    agent_rows: Sequence[tuple[Agent, Board | None]],
+    counts: dict[UUID, dict[str, int]],
+) -> list[AgentWorkloadAgent]:
+    result: list[AgentWorkloadAgent] = []
+    for agent, board in agent_rows:
+        agent_counts = counts.setdefault(agent.id, _initial_workload_counts())
+        result.append(
+            AgentWorkloadAgent(
+                agent_id=agent.id,
+                board_id=agent.board_id,
+                board_name=board.name if board is not None else None,
+                name=agent.name,
+                status=agent.status or "",
+                last_seen_at=agent.last_seen_at,
+                task_counts=AgentWorkloadTaskCounts(
+                    inbox=agent_counts.get("inbox", 0),
+                    in_progress=agent_counts.get("in_progress", 0),
+                    review=agent_counts.get("review", 0),
+                    done=agent_counts.get("done", 0),
+                ),
+            ),
+        )
+    return sorted(result, key=lambda entry: entry.name.lower())
+
+
+def _agent_workload_summary_from_agents(
+    agents: list[AgentWorkloadAgent],
+) -> AgentWorkloadSummary:
+    inbox = sum(entry.task_counts.inbox for entry in agents)
+    in_progress = sum(entry.task_counts.in_progress for entry in agents)
+    review = sum(entry.task_counts.review for entry in agents)
+    done = sum(entry.task_counts.done for entry in agents)
+    assigned = inbox + in_progress + review + done
+    online = sum(1 for entry in agents if (entry.status or "").lower() == "online")
+    return AgentWorkloadSummary(
+        total_agents=len(agents),
+        online_agents=online,
+        assigned_tasks=assigned,
+        inbox_tasks=inbox,
+        in_progress_tasks=in_progress,
+        review_tasks=review,
+        done_tasks=done,
+    )
+
+
+def _cron_items(payload: Any) -> list[Mapping[str, Any]]:
+    if isinstance(payload, list):
+        return [entry for entry in payload if isinstance(entry, Mapping)]
+    if isinstance(payload, Mapping):
+        for key in _CRON_ITEM_KEYS:
+            candidate = payload.get(key)
+            if isinstance(candidate, list):
+                return [entry for entry in candidate if isinstance(entry, Mapping)]
+    return []
+
+
+def _coerce_string_value(value: Any, keys: tuple[str, ...]) -> str | None:
+    if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, str):
+        trimmed = value.strip()
+        return trimmed or None
+    if isinstance(value, Mapping):
+        return _extract_string_value(value, keys)
+    return None
+
+
+def _extract_string_value(
+    entry: Mapping[str, Any],
+    keys: tuple[str, ...],
+) -> str | None:
+    if not isinstance(entry, Mapping):
+        return None
+    for key in keys:
+        if key not in entry:
+            continue
+        result = _coerce_string_value(entry[key], keys)
+        if result:
+            return result
+    metadata = entry.get("metadata")
+    if isinstance(metadata, Mapping):
+        return _extract_string_value(metadata, keys)
+    return None
+
+
+def _cron_schedule_label(entry: Mapping[str, Any]) -> str | None:
+    label = _extract_string_value(entry, _CRON_SCHEDULE_KEYS)
+    if label:
+        return label
+    schedule = entry.get("schedule")
+    if isinstance(schedule, Mapping):
+        nested_keys = _CRON_SCHEDULE_KEYS + ("expression", "pattern", "value")
+        nested_label = _extract_string_value(schedule, nested_keys)
+        if nested_label:
+            return nested_label
+        try:
+            return json.dumps(schedule, separators=(",", ":"))
+        except (TypeError, ValueError):
+            return None
+    if isinstance(schedule, str):
+        trimmed = schedule.strip()
+        return trimmed or None
+    return None
+
+
+def _coerce_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "enabled", "active"}:
+            return True
+        if normalized in {"0", "false", "no", "disabled", "inactive"}:
+            return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return None
+
+
+def _cron_enabled_flag(entry: Mapping[str, Any]) -> bool | None:
+    if not isinstance(entry, Mapping):
+        return None
+    for key in _CRON_ENABLED_KEYS:
+        flag = _coerce_bool(entry.get(key))
+        if flag is not None:
+            return flag
+    return _coerce_bool(entry.get("status"))
+
+
+def _datetime_from_epoch(value: float) -> datetime:
+    if value >= 1_000_000_000_000:
+        value /= 1000.0
+    return datetime.utcfromtimestamp(value)
+
+
+def _normalize_cron_datetime(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, (int, float)):
+        return _datetime_from_epoch(float(value))
+    if isinstance(value, str):
+        trimmed = value.strip()
+        if not trimmed:
+            return None
+        try:
+            return datetime.fromisoformat(trimmed)
+        except ValueError:
+            pass
+        try:
+            numeric = float(trimmed)
+        except ValueError:
+            return None
+        return _datetime_from_epoch(numeric)
+    return None
+
+
+def _build_calendar_event(
+    entry: Mapping[str, Any],
+    board_lookup: dict[str, Board],
+    gateway: Gateway,
+) -> CalendarEvent | None:
+    board_key = _extract_string_value(entry, _CRON_BOARD_KEYS)
+    if not board_key:
+        return None
+    board = board_lookup.get(board_key)
+    if board is None:
+        return None
+    event_id = _extract_string_value(entry, ("id", "cronId", "key", "name"))
+    if not event_id:
+        return None
+    return CalendarEvent(
+        id=event_id,
+        name=_extract_string_value(entry, ("name", "label", "title")),
+        description=_extract_string_value(entry, ("description", "summary", "details")),
+        board_id=board.id,
+        board_name=board.name,
+        schedule=_cron_schedule_label(entry),
+        next_run_at=_normalize_cron_datetime(
+            entry.get("next_run_at")
+            or entry.get("nextRunAt")
+            or entry.get("next_run")
+            or entry.get("nextRun")
+        ),
+        last_run_at=_normalize_cron_datetime(
+            entry.get("last_run_at")
+            or entry.get("lastRunAt")
+            or entry.get("last_run")
+            or entry.get("lastRun")
+        ),
+        enabled=_cron_enabled_flag(entry),
+        gateway_id=gateway.id,
+        gateway_name=gateway.name,
+    )
+
+
+async def _collect_calendar_events(
+    session: AsyncSession,
+    board_ids: list[UUID],
+) -> tuple[list[CalendarEvent], list[CalendarWarning]]:
+    """Gather cron events for accessible boards via the associated gateways.
+
+    Entries are filtered to boards that specify a gateway, and any gateway or
+    parsing problems are surfaced in the returned warnings so callers understand
+    what data may be missing.
+    """
+    warnings: list[CalendarWarning] = []
+    if not board_ids:
+        return [], warnings
+    boards = (await session.exec(select(Board).where(col(Board.id).in_(board_ids)))).all()
+    if not boards:
+        return [], warnings
+    boards_by_gateway: dict[UUID, list[Board]] = {}
+    gateway_ids: set[UUID] = set()
+    for board in boards:
+        if not board.gateway_id:
+            warnings.append(
+                CalendarWarning(
+                    board_id=board.id,
+                    message=f"Board {board.name} has no gateway configured; scheduled events are unavailable.",
+                )
+            )
+            continue
+        gateway_ids.add(board.gateway_id)
+        boards_by_gateway.setdefault(board.gateway_id, []).append(board)
+    if not gateway_ids:
+        return [], warnings
+    gateway_rows = (
+        await session.exec(select(Gateway).where(col(Gateway.id).in_(gateway_ids)))
+    ).all()
+    gateways_by_id = {gateway.id: gateway for gateway in gateway_rows}
+    missing_gateways = gateway_ids - set(gateways_by_id)
+    for missing in missing_gateways:
+        for board in boards:
+            if board.gateway_id == missing:
+                warnings.append(
+                    CalendarWarning(
+                        board_id=board.id,
+                        message="Board references an unknown gateway configuration.",
+                    )
+                )
+    events: list[CalendarEvent] = []
+    seen_ids: set[str] = set()
+    for gateway_id, gateway in gateways_by_id.items():
+        try:
+            config = gateway_client_config(gateway)
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, str) else "Gateway configuration invalid."
+            warnings.append(
+                CalendarWarning(
+                    gateway_id=gateway_id,
+                    message=detail,
+                )
+            )
+            continue
+        gateway_boards = boards_by_gateway.get(gateway_id, [])
+        if not gateway_boards:
+            continue
+        board_lookup = {str(board.id): board for board in gateway_boards}
+        try:
+            payload = await openclaw_call("cron.list", config=config)
+        except OpenClawGatewayError as exc:
+            warnings.append(
+                CalendarWarning(
+                    gateway_id=gateway_id,
+                    message=str(exc),
+                )
+            )
+            continue
+        for entry in _cron_items(payload):
+            event = _build_calendar_event(entry, board_lookup, gateway)
+            if event is None or event.id in seen_ids:
+                continue
+            seen_ids.add(event.id)
+            events.append(event)
+    events.sort(
+        key=lambda item: item.next_run_at or item.last_run_at or datetime.max,
+    )
+    return events, warnings
+
+
+@router.get("/dashboard/agent-workload", response_model=AgentWorkloadSnapshot)
+async def dashboard_agent_workload(
+    board_id: UUID | None = BOARD_ID_QUERY,
+    group_id: UUID | None = GROUP_ID_QUERY,
+    session: AsyncSession = SESSION_DEP,
+    ctx: OrganizationContext = ORG_MEMBER_DEP,
+) -> AgentWorkloadSnapshot:
+    """Return board-scoped agent workload totals."""
+    board_ids = await _resolve_dashboard_board_ids(
+        session,
+        ctx=ctx,
+        board_id=board_id,
+        group_id=group_id,
+    )
+    agents: list[AgentWorkloadAgent] = []
+    summary = _agent_workload_summary_from_agents([])
+    if board_ids:
+        agent_rows = (
+            await session.exec(
+                select(Agent, Board)
+                .join(Board, col(Board.id) == col(Agent.board_id))
+                .where(col(Agent.board_id).in_(board_ids))
+            )
+        ).all()
+        counts = await _agent_task_counts(session, board_ids)
+        agents = _agent_workload_agents(agent_rows, counts)
+        summary = _agent_workload_summary_from_agents(agents)
+    return AgentWorkloadSnapshot(
+        generated_at=utcnow(),
+        summary=summary,
+        agents=agents,
+    )
+
+
+@router.get("/dashboard/calendar", response_model=CalendarOverview)
+async def dashboard_calendar_overview(
+    board_id: UUID | None = BOARD_ID_QUERY,
+    group_id: UUID | None = GROUP_ID_QUERY,
+    session: AsyncSession = SESSION_DEP,
+    ctx: OrganizationContext = ORG_MEMBER_DEP,
+) -> CalendarOverview:
+    """Return a schedule overview sourced from gateway cron data for accessible boards."""
+    board_ids = await _resolve_dashboard_board_ids(
+        session,
+        ctx=ctx,
+        board_id=board_id,
+        group_id=group_id,
+    )
+    events, warnings = await _collect_calendar_events(session, board_ids)
+    return CalendarOverview(
+        generated_at=utcnow(),
+        events=events,
+        warnings=warnings,
+    )
 
 
 @router.get("/dashboard", response_model=DashboardMetrics)

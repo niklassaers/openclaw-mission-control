@@ -12,6 +12,7 @@ import {
   Activity,
   ArrowUpRight,
   Bot,
+  CalendarClock,
   Info,
   LayoutGrid,
   Shield,
@@ -44,6 +45,14 @@ import {
   useListActivityApiV1ActivityGet,
 } from "@/api/generated/activity/activity";
 import type { ActivityEventRead } from "@/api/generated/model";
+import {
+  type AgentWorkloadAgent,
+  type AgentWorkloadSummary,
+  type CalendarEvent,
+  type CalendarWarning,
+  useAgentWorkload,
+  useCalendarOverview,
+} from "@/api/mission-control/overview";
 import {
   formatRelativeTimestamp,
   formatTimestamp,
@@ -475,6 +484,247 @@ function InfoBlock({
   );
 }
 
+
+type AgentWorkloadPanelProps = {
+  isLoading: boolean;
+  error: ApiError | null;
+  summary: AgentWorkloadSummary | null;
+  agents: AgentWorkloadAgent[];
+};
+
+const agentWorkloadToneClass = (tone?: SummaryRow["tone"]) => {
+  if (tone === "success") return "text-emerald-700";
+  if (tone === "warning") return "text-amber-700";
+  if (tone === "danger") return "text-rose-700";
+  return "text-slate-800";
+};
+
+const statusToneClass = (status: string) => {
+  const normalized = status?.toLowerCase() || "";
+  if (normalized === "online") return "text-emerald-600";
+  if (normalized === "offline") return "text-rose-600";
+  return "text-slate-500";
+};
+
+export function AgentWorkloadPanel({
+  isLoading,
+  error,
+  summary,
+  agents,
+}: AgentWorkloadPanelProps) {
+  const summaryRows: SummaryRow[] = [
+    { label: "Assigned tasks", value: formatCount(summary?.assigned_tasks ?? 0) },
+    { label: "Inbox", value: formatCount(summary?.inbox_tasks ?? 0) },
+    {
+      label: "In progress",
+      value: formatCount(summary?.in_progress_tasks ?? 0),
+      tone: (summary?.in_progress_tasks ?? 0) > 0 ? "warning" : "default",
+    },
+    {
+      label: "In review",
+      value: formatCount(summary?.review_tasks ?? 0),
+      tone: (summary?.review_tasks ?? 0) > 0 ? "warning" : "default",
+    },
+    {
+      label: "Completed",
+      value: formatCount(summary?.done_tasks ?? 0),
+      tone: (summary?.done_tasks ?? 0) > 0 ? "success" : "default",
+    },
+    {
+      label: "Online agents",
+      value: formatCount(summary?.online_agents ?? 0),
+    },
+  ];
+  const highlightedAgents = agents.slice(0, 4);
+  return (
+    <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h3 className="text-lg font-semibold text-slate-900">Agent Workload</h3>
+        <span className="text-xs text-slate-500">Team assignments</span>
+      </div>
+      {error ? (
+        <div className="rounded-lg border border-rose-300 bg-rose-50 p-3 text-sm text-rose-700">
+          {error.message}
+        </div>
+      ) : null}
+      {isLoading && highlightedAgents.length === 0 ? (
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">
+          Loading agent workload...
+        </div>
+      ) : null}
+      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        {summaryRows.map((row) => (
+          <div
+            key={row.label}
+            className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
+          >
+            <span className="text-slate-500">{row.label}</span>
+            <span className={`font-semibold ${agentWorkloadToneClass(row.tone)}`}>
+              {row.value}
+            </span>
+          </div>
+        ))}
+      </div>
+      <div className="mt-4 border-t border-slate-100 pt-4">
+        {highlightedAgents.length > 0 ? (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {highlightedAgents.map((agent) => (
+              <div
+                key={agent.agent_id}
+                className="rounded-lg border border-slate-200 bg-white px-3 py-3 shadow-sm"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-slate-900">{agent.name}</p>
+                    <p className="text-[11px] text-slate-500">
+                      {agent.board_name ?? "Board unavailable"}
+                    </p>
+                  </div>
+                  <span
+                    className={`text-[11px] font-semibold uppercase ${statusToneClass(
+                      agent.status,
+                    )}`}
+                  >
+                    {agent.status || "Unknown"}
+                  </span>
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] text-slate-500">
+                  {(
+                    [
+                      ["Inbox", agent.task_counts.inbox],
+                      ["In progress", agent.task_counts.in_progress],
+                      ["In review", agent.task_counts.review],
+                      ["Completed", agent.task_counts.done],
+                    ] as const
+                  ).map(([label, value]) => (
+                    <div
+                      key={`${agent.agent_id}-${label}`}
+                      className="flex items-center justify-between"
+                    >
+                      <span>{label}</span>
+                      <span className="font-semibold text-slate-800">{formatCount(value)}</span>
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-2 text-[11px] text-slate-500">
+                  {agent.last_seen_at
+                    ? `Last seen ${formatRelativeTimestamp(agent.last_seen_at)}`
+                    : "Last activity unavailable"}
+                </p>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">
+            {isLoading ? "Loading agents..." : "No agent workload detected yet."}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+type SchedulePanelProps = {
+  isLoading: boolean;
+  error: ApiError | null;
+  events: CalendarEvent[];
+  warnings: CalendarWarning[];
+};
+
+const scheduleStatusLabel = (enabled: boolean | null) => {
+  if (enabled === true) return "Enabled";
+  if (enabled === false) return "Disabled";
+  return "Status unknown";
+};
+
+const scheduleStatusClass = (enabled: boolean | null) => {
+  if (enabled === true) return "text-emerald-600";
+  if (enabled === false) return "text-rose-600";
+  return "text-slate-500";
+};
+
+export function SchedulePanel({
+  isLoading,
+  error,
+  events,
+  warnings,
+}: SchedulePanelProps) {
+  const upcomingEvents = events.slice(0, 5);
+  return (
+    <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h3 className="text-lg font-semibold text-slate-900">Schedule &amp; Calendar</h3>
+        <span className="text-xs text-slate-500">Gateway cron overview</span>
+      </div>
+      {warnings.length > 0 ? (
+        <div className="space-y-2">
+          {warnings.map((warning, index) => (
+            <div
+              key={`warning-${index}`}
+              className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700"
+            >
+              {warning.message}
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {error ? (
+        <div className="rounded-lg border border-rose-300 bg-rose-50 p-3 text-sm text-rose-700">
+          {error.message}
+        </div>
+      ) : null}
+      {isLoading && upcomingEvents.length === 0 ? (
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">
+          Loading scheduled automation...
+        </div>
+      ) : null}
+      <div className="mt-3 space-y-2">
+        {upcomingEvents.length > 0 ? (
+          upcomingEvents.map((event) => {
+            const nextRun = event.next_run_at ?? event.last_run_at;
+            return (
+              <div
+                key={event.id}
+                className="rounded-lg border border-slate-200 bg-white px-3 py-3 shadow-sm"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-slate-900">
+                      {event.name ?? "Scheduled job"}
+                    </p>
+                    <p className="text-[11px] text-slate-500">
+                      {event.board_name ?? "Board unavailable"}
+                    </p>
+                  </div>
+                  <span
+                    className={`text-[11px] font-semibold uppercase ${scheduleStatusClass(
+                      event.enabled,
+                    )}`}
+                  >
+                    {scheduleStatusLabel(event.enabled)}
+                  </span>
+                </div>
+                <p className="mt-2 text-xs text-slate-500">
+                  {event.schedule ?? "Schedule not specified"}
+                </p>
+                <div className="mt-3 flex items-center justify-between text-[11px] text-slate-500">
+                  <span>Next: {nextRun ? formatRelativeTimestamp(nextRun) : "Unavailable"}</span>
+                  {nextRun ? <span>{formatTimestamp(nextRun)}</span> : null}
+                </div>
+              </div>
+            );
+          })
+        ) : (
+          <div className="flex flex-col items-center justify-center rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-500">
+            <CalendarClock className="mb-2 h-5 w-5 text-slate-400" />
+            No scheduled automation events detected yet.
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 export default function DashboardPage() {
   const router = useRouter();
   const { isSignedIn } = useAuth();
@@ -527,6 +777,14 @@ export default function DashboardPage() {
       },
     },
   );
+
+  const agentWorkloadQuery = useAgentWorkload(undefined, {
+    enabled: Boolean(isSignedIn),
+  });
+
+  const calendarQuery = useCalendarOverview(undefined, {
+    enabled: Boolean(isSignedIn),
+  });
 
   const boards = useMemo(
     () =>
@@ -688,6 +946,12 @@ export default function DashboardPage() {
   const errorRateMetric = Number(metrics?.kpis.error_rate_pct ?? 0);
   const reviewBacklogRatio =
     inProgressTasksMetric > 0 ? reviewTasksMetric / inProgressTasksMetric : null;
+
+  const agentWorkloadData = agentWorkloadQuery.data?.data ?? null;
+  const agentWorkloadSummary = agentWorkloadData?.summary ?? null;
+  const agentWorkloadAgents = agentWorkloadData?.agents ?? [];
+  const calendarEvents = calendarQuery.data?.data.events ?? [];
+  const calendarWarnings = calendarQuery.data?.data.warnings ?? [];
 
   const gatewayConnectedCount = gatewaySnapshots.filter(
     (snapshot) => !snapshot.requestError && snapshot.connected,
@@ -955,6 +1219,21 @@ export default function DashboardPage() {
                   tone: gatewayBadgeTone,
                 }}
                 rows={gatewayRows}
+              />
+            </div>
+
+            <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <AgentWorkloadPanel
+                isLoading={agentWorkloadQuery.isLoading}
+                error={agentWorkloadQuery.error ?? null}
+                summary={agentWorkloadSummary}
+                agents={agentWorkloadAgents}
+              />
+              <SchedulePanel
+                isLoading={calendarQuery.isLoading}
+                error={calendarQuery.error ?? null}
+                events={calendarEvents}
+                warnings={calendarWarnings}
               />
             </div>
 
